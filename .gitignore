@@ -1,0 +1,21 @@
+# CMake
+out/
+build/
+*.user
+*.suo
+
+# Visual Studio
+.vs/
+*.vcxproj
+*.vcxproj.filters
+*.sln
+*.opensdf
+*.sdf
+*.db
+
+# CMake 用户预设
+CMakeUserPresets.json
+
+# 输出文件
+bin/
+lib/

@@ -1,0 +1,19 @@
+# FARO 文件传输工具参数文件
+# 注释以 # 开头
+
+# 输入输出设置
+-input "C:\Scans\ConstructionSite\"
+-output "C:\Exports\Processed\"
+
+# 格式选项
+-format e57
+-compression high
+
+# 处理选项
+-resolution 0.01
+-colorize true
+-export-normals
+
+# 调试选项
+-verbose
+-log "C:\Logs\transfer.log"
