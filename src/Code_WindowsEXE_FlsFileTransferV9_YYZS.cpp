@@ -96,7 +96,7 @@ int main(int argc, char* argv[])
     // 步骤 2: 创建临时项目用于导入 FLS 文件
     // ============================================================
     // 创建一个临时项目路径
-    LSString tempProjectPath = L"E:\\temp\\fls_import_project";
+    LSString tempProjectPath = L".\\fls_transfer\\fls_import_project";
     LSString projectName = L"FLS_Import_Project";
 
     // 检查文件夹是否存在，如果存在则删除
@@ -131,7 +131,7 @@ int main(int argc, char* argv[])
     }
 
     // 创建父目录（如果不存在）
-    LSString parentDir = L"E:\\temp";
+    LSString parentDir = L".\\fls_transfer";
     try {
         if (!fs::exists(parentDir.toWcharStr())) {
             if (fs::create_directories(parentDir.toWcharStr())) {
