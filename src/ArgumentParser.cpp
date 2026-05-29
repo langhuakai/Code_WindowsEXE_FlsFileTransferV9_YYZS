@@ -148,7 +148,7 @@ void ArgumentParser::showHelp(const char* programName)
     std::cout << "  -h, --help          显示帮助信息" << std::endl;
     std::cout << std::endl;
     std::cout << "示例:" << std::endl;
-    std::cout << "  单文件模式: " << programName << " -i scan.fls -o output.las" << std::endl;
-    std::cout << "  目录批处理: " << programName << " -i ./scans/ -o ./output/ -f las" << std::endl;
+    std::cout << "  单文件模式: " << programName << " -i scan.fls -o output.e57" << std::endl;
+    std::cout << "  目录批处理: " << programName << " -i ./scans/ -o ./output/ -f e57" << std::endl;
     std::cout << std::endl;
 }

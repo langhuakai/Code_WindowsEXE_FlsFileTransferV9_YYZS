@@ -5,6 +5,7 @@
 
 #include <iostream>
 #include <filesystem>
+#include <windows.h>
 #include <fstream>
 #include <iomanip>
 #include <vector>
@@ -48,7 +49,10 @@ OS0wNC0yMFQwMDowMDowMC4wMDBaIgp9
 -----END SCENE API KEY-----
 )key");
 
-static const LSString TEMP_BASE = L".\\fls_transfer";
+static std::string getTempProjectDir(const std::string& stem)
+{
+    return ".\\fls_transfer\\" + stem + "_" + std::to_string(GetCurrentProcessId());
+}
 
 // ──────────────────────────────────────────────
 // Format mapping tables
@@ -186,7 +190,8 @@ static bool processFile(const std::string& inputFile, const std::string& outputF
     std::cout << "========================================" << std::endl;
 
     std::string stem = fs::path(inputFile).stem().string();
-    LSString tempProjectPath = TEMP_BASE + LSString::fromCharStr(("\\" + stem + "_project").c_str());
+    std::string tempDir = getTempProjectDir(stem);
+    LSString tempProjectPath = LSString::fromCharStr(tempDir.c_str());
 
     removeDirectory(tempProjectPath);
     ensureParentDir(tempProjectPath);
@@ -360,7 +365,6 @@ int main(int argc, char* argv[])
 
     // ── Cleanup ──
     delete context;
-    removeDirectory(TEMP_BASE);
 
     std::cout << "\nDone! Processed " << successCount << "/" << inputFiles.size() << " files." << std::endl;
     return (successCount == static_cast<int>(inputFiles.size())) ? 0 : 1;
