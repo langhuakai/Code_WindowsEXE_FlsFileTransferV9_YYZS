@@ -9,13 +9,13 @@
 namespace fs = std::filesystem;
 
 static const std::vector<std::string> FORMAT_NAMES = {
-    "dxf", "e57", "fls", "igs", "pod", "pts", "ptx",
+    "dxf", "e57", "fls", "igs", "off", "pod", "pts", "ptx",
     "wrl", "xyb", "xyz", "cpe", "bmp", "jpg", "png",
     "tif", "las", "ply"
 };
 
 static const std::vector<std::string> FORMAT_EXTENSIONS = {
-    ".dxf", ".e57", ".fls", ".igs", ".pod", ".pts", ".ptx",
+    ".dxf", ".e57", ".fls", ".igs", ".off", ".pod", ".pts", ".ptx",
     ".wrl", ".xyb", ".xyz", ".cpe", ".bmp", ".jpg", ".png",
     ".tif", ".las", ".ply"
 };
@@ -143,7 +143,7 @@ void ArgumentParser::showHelp(const char* programName)
     std::cout << "                        否则为目录批处理模式)" << std::endl;
     std::cout << "  -f, --format <格式>  输出格式 (默认: ply)" << std::endl;
     std::cout << "       支持的格式:" << std::endl;
-    std::cout << "        点云: dxf e57 fls igs las ply pod pts ptx wrl xyb xyz cpe" << std::endl;
+    std::cout << "        点云: dxf e57 fls igs las off ply pod pts ptx wrl xyb xyz cpe" << std::endl;
     std::cout << "        图像: bmp jpg png tif" << std::endl;
     std::cout << "  -h, --help          显示帮助信息" << std::endl;
     std::cout << std::endl;

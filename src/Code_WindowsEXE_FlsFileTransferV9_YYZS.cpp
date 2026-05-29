@@ -2,6 +2,7 @@
 #include "ArgumentParser.h"
 #include "StringConverter.h"
 #include "FlsToPly.h"
+#include "FlsToOff.h"
 
 #include <iostream>
 #include <filesystem>
@@ -81,6 +82,7 @@ static const FormatEntry FORMAT_TABLE[] = {
     { "tif", ".tif", LSScan::TIF },
     { "las", ".las", LSScan::LAS },
     { "ply", ".ply", LSScan::DXF }, // not used, handled separately
+    { "off", ".off", LSScan::DXF }, // not used, handled separately
 };
 
 static const size_t FORMAT_COUNT = sizeof(FORMAT_TABLE) / sizeof(FORMAT_TABLE[0]);
@@ -157,6 +159,11 @@ static void exportScan(const ref_ptr<LSScan> scan, const std::string& outputPath
 
     if (format == "ply") {
         FlsToPly::transToPlyRgb(scan, outputPath);
+        return;
+    }
+
+    if (format == "off") {
+        FlsToOff::transToOff(scan, outputPath);
         return;
     }
 
