@@ -1,4 +1,4 @@
-// ArgumentParser.h
+ï»¿// ArgumentParser.h
 #pragma once
 
 #include <string>
@@ -6,22 +6,24 @@
 class ArgumentParser
 {
 public:
-    // ²ÎÊı½á¹¹
+    // å‚æ•°ç»“æ„
     struct Options
     {
-        std::string inputFile;     // ÊäÈëÎÄ¼ş
-        std::string outputDir;     // Êä³öÄ¿Â¼
+        std::string inputFile;     // è¾“å…¥æ–‡ä»¶æˆ–ç›®å½•
+        std::string outputPath;    // è¾“å‡ºæ–‡ä»¶æˆ–ç›®å½•
+        std::string format = "ply"; // è¾“å‡ºæ ¼å¼
+        bool outputIsDir = false;  // è¾“å‡ºè·¯å¾„æ˜¯å¦ä¸ºç›®å½•
 
-        bool help = false;         // ÊÇ·ñÏÔÊ¾°ïÖú
-        bool valid = false;        // ²ÎÊıÊÇ·ñÓĞĞ§
+        bool help = false;         // æ˜¯å¦æ˜¾ç¤ºå¸®åŠ©
+        bool valid = false;        // å‚æ•°æ˜¯å¦æœ‰æ•ˆ
     };
 
 public:
     ArgumentParser() = default;
 
-    // ½âÎöÃüÁîĞĞ²ÎÊı
+    // è§£æå‘½ä»¤è¡Œå‚æ•°
     Options parse(int argc, char* argv[]);
 
-    // ÏÔÊ¾°ïÖúĞÅÏ¢
+    // æ˜¾ç¤ºå¸®åŠ©ä¿¡æ¯
     static void showHelp(const char* programName);
 };

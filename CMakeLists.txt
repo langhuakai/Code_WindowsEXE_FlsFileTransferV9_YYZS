@@ -34,7 +34,7 @@ endif()
 aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/src SRC_LIST)
 
 # 添加可执行文件
-add_executable(${PROJECT_NAME} ${SRC_LIST} "src/ArgumentParser.h" "src/ArgumentParser.cpp" "src/StringConverter.cpp" "src/StringConverter.h" "src/FlsToPly.h" "src/FlsToPly.cpp")
+add_executable(${PROJECT_NAME} ${SRC_LIST} "src/ArgumentParser.h" "src/ArgumentParser.cpp" "src/StringConverter.cpp" "src/StringConverter.h" "src/FlsToPly.h" "src/FlsToPly.cpp" "src/FlsToE57.h" "src/FlsToE57.cpp")
 
 # 头文件包含
 target_include_directories(${PROJECT_NAME} PRIVATE

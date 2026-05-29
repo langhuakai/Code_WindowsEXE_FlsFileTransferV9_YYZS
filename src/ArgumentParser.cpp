@@ -1,20 +1,53 @@
-// ArgumentParser.cpp
+ï»¿// ArgumentParser.cpp
 #include "ArgumentParser.h"
 #include <iostream>
 #include <string>
+#include <filesystem>
+#include <vector>
+#include <algorithm>
+
+namespace fs = std::filesystem;
+
+static const std::vector<std::string> FORMAT_NAMES = {
+    "dxf", "e57", "fls", "igs", "pod", "pts", "ptx",
+    "wrl", "xyb", "xyz", "cpe", "bmp", "jpg", "png",
+    "tif", "las", "ply"
+};
+
+static const std::vector<std::string> FORMAT_EXTENSIONS = {
+    ".dxf", ".e57", ".fls", ".igs", ".pod", ".pts", ".ptx",
+    ".wrl", ".xyb", ".xyz", ".cpe", ".bmp", ".jpg", ".png",
+    ".tif", ".las", ".ply"
+};
+
+static bool isKnownExtension(const std::string& ext)
+{
+    for (const auto& known : FORMAT_EXTENSIONS) {
+        if (ext == known) return true;
+    }
+    return false;
+}
+
+static bool isValidFormat(const std::string& fmt)
+{
+    std::string lower = fmt;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    for (const auto& name : FORMAT_NAMES) {
+        if (lower == name) return true;
+    }
+    return false;
+}
 
 ArgumentParser::Options ArgumentParser::parse(int argc, char* argv[])
 {
     Options options;
 
-    // Èç¹ûÃ»ÓĞ²ÎÊı£¬ÏÔÊ¾°ïÖú
     if (argc == 1)
     {
         options.help = true;
         return options;
     }
 
-    // ±éÀúËùÓĞ²ÎÊı
     for (int i = 1; i < argc; i++)
     {
         std::string arg = argv[i];
@@ -27,7 +60,7 @@ ArgumentParser::Options ArgumentParser::parse(int argc, char* argv[])
             }
             else
             {
-                std::cerr << "´íÎó: -i ĞèÒªÖ¸¶¨ÊäÈëÎÄ¼ş" << std::endl;
+                std::cerr << "é”™è¯¯: -i éœ€è¦æŒ‡å®šè¾“å…¥æ–‡ä»¶æˆ–ç›®å½•" << std::endl;
                 return options;
             }
         }
@@ -35,11 +68,31 @@ ArgumentParser::Options ArgumentParser::parse(int argc, char* argv[])
         {
             if (i + 1 < argc)
             {
-                options.outputDir = argv[++i];
+                options.outputPath = argv[++i];
             }
             else
             {
-                std::cerr << "´íÎó: -o ĞèÒªÖ¸¶¨Êä³öÄ¿Â¼" << std::endl;
+                std::cerr << "é”™è¯¯: -o éœ€è¦æŒ‡å®šè¾“å‡ºæ–‡ä»¶æˆ–ç›®å½•" << std::endl;
+                return options;
+            }
+        }
+        else if (arg == "--format" || arg == "-f")
+        {
+            if (i + 1 < argc)
+            {
+                std::string fmt = argv[++i];
+                std::string lower = fmt;
+                std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                if (!isValidFormat(lower))
+                {
+                    std::cerr << "é”™è¯¯: ä¸æ”¯æŒçš„æ ¼å¼ '" << fmt << "'" << std::endl;
+                    return options;
+                }
+                options.format = lower;
+            }
+            else
+            {
+                std::cerr << "é”™è¯¯: --format éœ€è¦æŒ‡å®šæ ¼å¼" << std::endl;
                 return options;
             }
         }
@@ -49,37 +102,53 @@ ArgumentParser::Options ArgumentParser::parse(int argc, char* argv[])
         }
         else
         {
-            std::cerr << "¾¯¸æ: ºöÂÔÎ´Öª²ÎÊı: " << arg << std::endl;
+            std::cerr << "é”™è¯¯: å­˜åœ¨æœªçŸ¥å‚æ•°: " << arg << std::endl;
         }
     }
 
-    // ÑéÖ¤±ØÒª²ÎÊı
-    if (!options.inputFile.empty())
+    if (options.inputFile.empty())
     {
-        options.valid = true;
+        std::cerr << "é”™è¯¯: å¿…é¡»æŒ‡å®šè¾“å…¥æ–‡ä»¶æˆ–ç›®å½• (-i)" << std::endl;
+        return options;
+    }
+
+    if (!options.outputPath.empty())
+    {
+        std::string ext = fs::path(options.outputPath).extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        options.outputIsDir = !isKnownExtension(ext);
     }
     else
     {
-        std::cerr << "´íÎó: ±ØĞëÖ¸¶¨ÊäÈëÎÄ¼ş (-i)" << std::endl;
+        options.outputPath = ".";
+        options.outputIsDir = true;
     }
 
+    options.valid = true;
     return options;
 }
 
 void ArgumentParser::showHelp(const char* programName)
 {
     std::cout << std::endl;
-    std::cout << "FARO ÎÄ¼ş×ª»»¹¤¾ß" << std::endl;
+    std::cout << "FARO æ–‡ä»¶è½¬æ¢å·¥å…·" << std::endl;
     std::cout << "================" << std::endl;
     std::cout << std::endl;
-    std::cout << "ÓÃ·¨: " << programName << " [Ñ¡Ïî]" << std::endl;
+    std::cout << "ç”¨æ³•: " << programName << " [é€‰é¡¹]" << std::endl;
     std::cout << std::endl;
-    std::cout << "Ñ¡Ïî:" << std::endl;
-    std::cout << "  -i, --input <ÎÄ¼ş>   ÊäÈë FLS/SCN ÎÄ¼ş" << std::endl;
-    std::cout << "  -o, --output <ÎÄ¼ş>  Êä³öÎÄ¼şÂ·¾¶" << std::endl;
-    std::cout << "  -h, --help          ÏÔÊ¾°ïÖúĞÅÏ¢" << std::endl;
+    std::cout << "é€‰é¡¹:" << std::endl;
+    std::cout << "  -i, --input <è·¯å¾„>   è¾“å…¥ FLS/SCN æ–‡ä»¶æˆ–ç›®å½•" << std::endl;
+    std::cout << "  -o, --output <è·¯å¾„>  è¾“å‡ºæ–‡ä»¶æˆ–ç›®å½•" << std::endl;
+    std::cout << "                       (æŒ‡å®šæ‰©å±•åæ—¶ä¸ºå•æ–‡ä»¶æ¨¡å¼," << std::endl;
+    std::cout << "                        å¦åˆ™ä¸ºç›®å½•æ‰¹å¤„ç†æ¨¡å¼)" << std::endl;
+    std::cout << "  -f, --format <æ ¼å¼>  è¾“å‡ºæ ¼å¼ (é»˜è®¤: ply)" << std::endl;
+    std::cout << "       æ”¯æŒçš„æ ¼å¼:" << std::endl;
+    std::cout << "        ç‚¹äº‘: dxf e57 fls igs las ply pod pts ptx wrl xyb xyz cpe" << std::endl;
+    std::cout << "        å›¾åƒ: bmp jpg png tif" << std::endl;
+    std::cout << "  -h, --help          æ˜¾ç¤ºå¸®åŠ©ä¿¡æ¯" << std::endl;
     std::cout << std::endl;
-    std::cout << "Ê¾Àı:" << std::endl;
-    std::cout << "  " << programName << " -i scan.fls -o ./output/test.ply" << std::endl;
+    std::cout << "ç¤ºä¾‹:" << std::endl;
+    std::cout << "  å•æ–‡ä»¶æ¨¡å¼: " << programName << " -i scan.fls -o output.las" << std::endl;
+    std::cout << "  ç›®å½•æ‰¹å¤„ç†: " << programName << " -i ./scans/ -o ./output/ -f las" << std::endl;
     std::cout << std::endl;
 }

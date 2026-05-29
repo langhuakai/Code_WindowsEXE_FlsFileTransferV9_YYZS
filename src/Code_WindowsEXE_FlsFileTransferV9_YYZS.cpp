@@ -5,8 +5,11 @@
 
 #include <iostream>
 #include <filesystem>
-#include <fstream>     // 添加文件流头文件
-#include <iomanip>     // 添加IO格式化头文件
+#include <fstream>
+#include <iomanip>
+#include <vector>
+#include <string>
+#include <algorithm>
 #include <core_api/lsglobaldefinitions.h>
 #include <core_api/lsproject.h>
 #include <core_api/lsworkspace.h>
@@ -24,8 +27,6 @@
 using namespace SCENE_API;
 namespace fs = std::filesystem;
 
-// 你的 API Key (用于解锁读取点云功能)
-// const wchar_t* API_KEY = L"YOUR_API_KEY_HERE";
 const wchar_t* API_KEY = L"(YOUR_API_KEY_HERE)";
 const LSString apiKey = LSString::fromCharStr( R"key(
 -----BEGIN SCENE API KEY-----
@@ -47,182 +48,195 @@ OS0wNC0yMFQwMDowMDowMC4wMDBaIgp9
 -----END SCENE API KEY-----
 )key");
 
-int main(int argc, char* argv[])
+static const LSString TEMP_BASE = L".\\fls_transfer";
+
+// ──────────────────────────────────────────────
+// Format mapping tables
+// ──────────────────────────────────────────────
+struct FormatEntry {
+    const char* name;
+    const char* ext;
+    LSScan::ExportFormat exportFmt;
+};
+
+static const FormatEntry FORMAT_TABLE[] = {
+    { "dxf", ".dxf", LSScan::DXF },
+    { "e57", ".e57", LSScan::E57 },
+    { "fls", ".fls", LSScan::FLS },
+    { "igs", ".igs", LSScan::IGS },
+    { "pod", ".pod", LSScan::POD },
+    { "pts", ".pts", LSScan::PTS },
+    { "ptx", ".ptx", LSScan::PTX },
+    { "wrl", ".wrl", LSScan::WRL },
+    { "xyb", ".xyb", LSScan::XYB },
+    { "xyz", ".xyz", LSScan::XYZ },
+    { "cpe", ".cpe", LSScan::CPE },
+    { "bmp", ".bmp", LSScan::BMP },
+    { "jpg", ".jpg", LSScan::JPG },
+    { "png", ".png", LSScan::PNG },
+    { "tif", ".tif", LSScan::TIF },
+    { "las", ".las", LSScan::LAS },
+    { "ply", ".ply", LSScan::DXF }, // not used, handled separately
+};
+
+static const size_t FORMAT_COUNT = sizeof(FORMAT_TABLE) / sizeof(FORMAT_TABLE[0]);
+
+static const FormatEntry* lookupFormat(const std::string& name)
 {
-
-    // 创建参数解析器
-    ArgumentParser parser;
-
-    // 解析参数
-    auto options = parser.parse(argc, argv);
-
-    // 显示帮助
-    if (options.help)
-    {
-        ArgumentParser::showHelp(argv[0]);
-        return 0;
+    for (size_t i = 0; i < FORMAT_COUNT; ++i) {
+        if (name == FORMAT_TABLE[i].name)
+            return &FORMAT_TABLE[i];
     }
+    return nullptr;
+}
 
-    // 检查参数是否有效
-    if (!options.valid)
-    {
-        std::cerr << std::endl;
-        ArgumentParser::showHelp(argv[0]);
-        return 1;
-    }
-
-    // 使用参数
-    std::cout << "开始处理..." << std::endl;
-    std::cout << "输入文件: " << options.inputFile << std::endl;
-    std::cout << "输出目录: " << options.outputDir << std::endl;
-    std::cout << std::endl;
-
-
-    // ============================================================
-    // 步骤 1: 创建 Standalone Context (需要 API Key)
-    // ============================================================
-    // 方式 1: 使用 LSStandaloneConfig 配置 (推荐)
-    LSStandaloneConfig config;
-    config.setLicenseKey(apiKey);
-    config.setLoggingEnabled(true);
-    LSStandaloneContext* context = new LSStandaloneContext(config);
-
-    // 方式 2: 直接使用 API Key 构造 (简单方式)
-    // LSStandaloneContext* context = new LSStandaloneContext(API_KEY);
-
-    std::cout << "SCENE API Context created successfully." << std::endl;
-
-    // ============================================================
-    // 步骤 2: 创建临时项目用于导入 FLS 文件
-    // ============================================================
-    // 创建一个临时项目路径
-    LSString tempProjectPath = L".\\fls_transfer\\fls_import_project";
-    LSString projectName = L"FLS_Import_Project";
-
-    // 检查文件夹是否存在，如果存在则删除
+// ──────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────
+static bool removeDirectory(const LSString& path)
+{
     try {
-        if (fs::exists(tempProjectPath.toWcharStr())) {
-            std::cout << "Temporary project directory already exists. Removing it..." << std::endl;
-
-            // 删除整个目录
+        if (fs::exists(path.toWcharStr())) {
             std::error_code ec;
-            uintmax_t removedCount = fs::remove_all(tempProjectPath.toWcharStr(), ec);
-
+            fs::remove_all(path.toWcharStr(), ec);
             if (ec) {
-                std::cerr << "Failed to remove existing directory. Error: " << ec.message() << std::endl;
-                delete context;
-                return -1;
+                std::cerr << "Warning: could not remove " << path.toCharStr() << ": " << ec.message() << std::endl;
+                return false;
             }
-
-            std::cout << "Removed " << removedCount << " items from existing directory." << std::endl;
-
-            // 等待一小会儿确保文件系统操作完成
 #ifdef _WIN32
             _sleep(100);
 #else
             usleep(100000);
 #endif
         }
+        return true;
     }
     catch (const std::exception& e) {
-        std::cerr << "Exception while checking/removing directory: " << e.what() << std::endl;
-        delete context;
-        return -1;
+        std::cerr << "Exception removing directory: " << e.what() << std::endl;
+        return false;
     }
+}
 
-    // 创建父目录（如果不存在）
-    LSString parentDir = L".\\fls_transfer";
+static bool ensureParentDir(const LSString& path)
+{
     try {
-        if (!fs::exists(parentDir.toWcharStr())) {
-            if (fs::create_directories(parentDir.toWcharStr())) {
-                std::cout << "Created parent directory: " << parentDir.toCharStr() << std::endl;
-            }
+        fs::path parent = fs::path(path.toWcharStr()).parent_path();
+        if (!parent.empty() && !fs::exists(parent)) {
+            fs::create_directories(parent);
         }
+        return true;
     }
     catch (const std::exception& e) {
-        std::cerr << "Failed to create parent directory: " << e.what() << std::endl;
-        delete context;
-        return -1;
+        std::cerr << "Failed to create directory: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+static uint64_t estimatePointCount(const ref_ptr<LSScan> scan)
+{
+    // Structured FARO scans: cols × rows gives an instant estimate
+    int cols = scan->getNumCols();
+    int rows = scan->getNumRows();
+    if (cols > 0 && rows > 0) {
+        return static_cast<uint64_t>(cols) * rows;
+    }
+    return 0;
+}
+
+static void exportScan(const ref_ptr<LSScan> scan, const std::string& outputPath, const std::string& format)
+{
+    const FormatEntry* entry = lookupFormat(format);
+    if (!entry) {
+        std::cerr << "Unsupported format: " << format << std::endl;
+        return;
     }
 
+    if (format == "ply") {
+        FlsToPly::transToPlyRgb(scan, outputPath);
+        return;
+    }
+
+    // Show estimated point count from scan metadata (zero-cost)
+    uint64_t estimated = estimatePointCount(scan);
+    if (estimated > 0) {
+        std::cout << "Exporting ~" << estimated << " points to " << format << " format..." << std::endl;
+    } else {
+        std::cout << "Exporting to " << format << " format..." << std::endl;
+    }
+
+    LSResult::Result result = scan->exportData(
+        LSString::fromCharStr(outputPath.c_str()), entry->exportFmt);
+    if (result != LSResult::Ok) {
+        std::cerr << "Failed to export to " << format
+                  << ". Error code: " << result << std::endl;
+    } else {
+        std::cout << "Export completed: " << outputPath << std::endl;
+    }
+}
+
+// ──────────────────────────────────────────────
+// Process a single FLS file → output file
+// ──────────────────────────────────────────────
+static bool processFile(const std::string& inputFile, const std::string& outputFile,
+                        const std::string& format, LSStandaloneContext* context)
+{
+    std::cout << "\n========================================\n";
+    std::cout << "Processing: " << inputFile << std::endl;
+    std::cout << "Output to:  " << outputFile << std::endl;
+    std::cout << "========================================" << std::endl;
+
+    std::string stem = fs::path(inputFile).stem().string();
+    LSString tempProjectPath = TEMP_BASE + LSString::fromCharStr(("\\" + stem + "_project").c_str());
+
+    removeDirectory(tempProjectPath);
+    ensureParentDir(tempProjectPath);
+
+    LSString projectName = LSString::fromCharStr(("Import_" + stem).c_str());
     LSResult::Result result = LSProject::createProject(tempProjectPath, projectName);
     if (result != LSResult::Ok) {
         std::cerr << "Failed to create project. Error code: " << result << std::endl;
-        delete context;
-        return -1;
+        return false;
     }
-    std::cout << "Project created successfully." << std::endl;
 
-    // ============================================================
-    // 步骤 3: 加载项目
-    // ============================================================
     ref_ptr<LSProject> project;
     result = LSProject::loadProject(tempProjectPath, project, false);
     if (result != LSResult::Ok) {
         std::cerr << "Failed to load project. Error code: " << result << std::endl;
-        delete context;
-        return -1;
+        return false;
     }
-    std::cout << "Project loaded successfully." << std::endl;
-
-    // 设置当前工作空间 (Standalone API 必需)
     context->setCurrentWorkspace(project);
 
-    // ============================================================
-    // 步骤 4: 导入 FLS 文件
-    // ============================================================
-    // 使用 LSWorkspace::importData() 导入 FLS 文件
-    // LSString::fromCharStr(options.inputFile.c_str());
-    bool importSuccess = project->importData(LSString::fromCharStr(options.inputFile.c_str()));
+    bool importSuccess = project->importData(LSString::fromCharStr(inputFile.c_str()));
     if (!importSuccess) {
         std::cerr << "Failed to import FLS file." << std::endl;
-        delete context;
-        return -1;
+        project.reset();
+        removeDirectory(tempProjectPath);
+        return false;
     }
     std::cout << "FLS file imported successfully." << std::endl;
 
-    // ============================================================
-    // 步骤 5: 获取导入的扫描数据
-    // ============================================================
-    // 获取所有扫描
     LSPod<std::vector<ref_ptr<LSScan>>> scans = project->getScans();
     if (scans.get().empty()) {
         std::cerr << "No scans found in project." << std::endl;
-        delete context;
-        return -1;
+        project.reset();
+        removeDirectory(tempProjectPath);
+        return false;
     }
-    std::cout << "Found " << scans.get().size() << " scan(s) in project." << std::endl;
+    std::cout << "Found " << scans.get().size() << " scan(s)." << std::endl;
 
-    // 创建输出目录
-    std::string outputDir = options.outputDir;
-    //try {
-    //    if (!fs::exists(outputDir)) {
-    //        fs::create_directories(outputDir);
-    //        std::cout << "Created output directory: " << outputDir << std::endl;
-    //    }
-    //}
-    //catch (const std::exception& e) {
-    //    std::cerr << "Failed to create output directory: " << e.what() << std::endl;
-    //    outputDir = ".";  // 使用当前目录
-    //}
+    const FormatEntry* fmtEntry = lookupFormat(format);
+    const char* ext = fmtEntry ? fmtEntry->ext : ".ply";
 
-    // ============================================================
-    // 步骤 6: 遍历每个扫描并读取点云数据
-    // ============================================================
+    bool multiScan = scans.get().size() > 1;
+    std::string outBase = outputFile;
+    if (multiScan) {
+        outBase = outputFile.substr(0, outputFile.size() - fs::path(outputFile).extension().string().size());
+    }
+
     for (size_t i = 0; i < scans.get().size(); ++i) {
         ref_ptr<LSScan> scan = scans.get()[i];
-        std::cout << "\n--- Processing Scan " << (i + 1) << " ---" << std::endl;
+        std::cout << "\n--- Scan " << (i + 1) << " ---" << std::endl;
 
-        // 检查是否有空间数据
-        /*if (!scan->spatialDataAvailable()) {
-            std::cout << "No spatial data available for this scan." << std::endl;
-            continue;
-        }*/
-
-        // ============================================================
-        // 步骤 7: 加载扫描数据 (需要 API Key)
-        // ============================================================
-        // 加载数据 - 这需要 API Key
         result = scan->loadData(LSScan::AUTO);
         if (result != LSResult::Ok) {
             std::cerr << "Failed to load scan data. Error code: " << result << std::endl;
@@ -231,119 +245,123 @@ int main(int argc, char* argv[])
             }
             continue;
         }
-        std::cout << "Scan data loaded successfully." << std::endl;
 
-        // ============================================================
-        // 步骤 8: 使用迭代器遍历点云数据并保存为PLY
-        // ============================================================
-        // 保存RGB点云
-        FlsToPly::transToPlyRgb(scan, options.outputDir);
+        std::string scanOut = multiScan
+            ? outBase + "_" + std::to_string(i + 1) + ext
+            : outputFile;
 
-        // ============================================================
-        // 步骤 12: 卸载扫描数据 (释放内存)
-        // ============================================================
+        exportScan(scan, scanOut, format);
         scan->unloadData();
-        std::cout << "\nScan data unloaded." << std::endl;
     }
 
-    // ============================================================
-    // 清理
-    // ============================================================
-    std::cout << "\nCleaning up..." << std::endl;
+    project.reset();
+    removeDirectory(tempProjectPath);
+    return true;
+}
 
-    // 显示输出目录中的文件
-    try {
-        std::cout << "\nGenerated PLY files in " << outputDir << ":" << std::endl;
-        for (const auto& entry : fs::directory_iterator(outputDir)) {
-            if (entry.path().extension() == ".ply") {
-                std::cout << "  " << entry.path().filename().string() << std::endl;
+// ──────────────────────────────────────────────
+// Entry point
+// ──────────────────────────────────────────────
+int main(int argc, char* argv[])
+{
+    ArgumentParser parser;
+    auto options = parser.parse(argc, argv);
+
+    if (options.help)
+    {
+        ArgumentParser::showHelp(argv[0]);
+        return 0;
+    }
+
+    if (!options.valid)
+    {
+        std::cerr << std::endl;
+        ArgumentParser::showHelp(argv[0]);
+        return 1;
+    }
+
+    if (!lookupFormat(options.format))
+    {
+        std::cerr << "错误: 不支持的格式 '" << options.format << "'" << std::endl;
+        return 1;
+    }
+
+    // ── Collect input files ──
+    std::vector<std::string> inputFiles;
+    fs::path inputPath(options.inputFile);
+
+    if (fs::is_directory(inputPath))
+    {
+        std::cout << "Scanning directory: " << options.inputFile << std::endl;
+        for (const auto& entry : fs::directory_iterator(inputPath))
+        {
+            std::string ext = entry.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            if (ext == ".fls" || ext == ".scn")
+            {
+                inputFiles.push_back(entry.path().string());
             }
         }
-    }
-    catch (const std::exception& e) {
-        std::cerr << "Cannot list output files: " << e.what() << std::endl;
-    }
-
-    // 释放项目
-    project.reset();
-
-    // 清理临时目录
-    try {
-        std::cout << "\nCleaning up temporary project directory..." << std::endl;
-        std::error_code ec;
-        uintmax_t removedCount = fs::remove_all(tempProjectPath.toWcharStr(), ec);
-        if (ec) {
-            std::cerr << "Warning: Could not completely clean up temp directory: " << ec.message() << std::endl;
+        if (inputFiles.empty())
+        {
+            std::cerr << "No FLS/SCN files found in directory: " << options.inputFile << std::endl;
+            return 1;
         }
-        else {
-            std::cout << "Removed " << removedCount << " items from temp directory." << std::endl;
-        }
+        std::cout << "Found " << inputFiles.size() << " file(s) to process." << std::endl;
     }
-    catch (const std::exception& e) {
-        std::cerr << "Exception while cleaning up temp directory: " << e.what() << std::endl;
+    else if (fs::exists(inputPath))
+    {
+        inputFiles.push_back(options.inputFile);
+    }
+    else
+    {
+        std::cerr << "Input path does not exist: " << options.inputFile << std::endl;
+        return 1;
     }
 
-    // 删除 context (必须在所有 API 对象之后删除)
+    // ── Create SCENE API context ──
+    std::cout << "\nCreating SCENE API context..." << std::endl;
+    LSStandaloneConfig config;
+    config.setLicenseKey(apiKey);
+    config.setLoggingEnabled(true);
+    LSStandaloneContext* context = new LSStandaloneContext(config);
+    std::cout << "SCENE API Context created successfully." << std::endl;
+
+    const FormatEntry* fmtEntry = lookupFormat(options.format);
+    const char* ext = fmtEntry ? fmtEntry->ext : ".ply";
+    int successCount = 0;
+
+    // ── Process each input file ──
+    for (const auto& inputFile : inputFiles)
+    {
+        std::string outputPath;
+
+        if (options.outputIsDir)
+        {
+            std::string stem = fs::path(inputFile).stem().string();
+            outputPath = options.outputPath + "\\" + stem + ext;
+        }
+        else
+        {
+            if (inputFiles.size() > 1)
+            {
+                std::cerr << "Single file output mode is not supported for multiple inputs." << std::endl;
+                std::cerr << "Please use a directory for -o when batch processing." << std::endl;
+                continue;
+            }
+            outputPath = options.outputPath;
+        }
+
+        if (processFile(inputFile, outputPath, options.format, context))
+        {
+            ++successCount;
+        }
+    }
+
+    // ── Cleanup ──
     delete context;
+    removeDirectory(TEMP_BASE);
 
-    std::cout << "\nDone! All point clouds have been saved to PLY format." << std::endl;
-    std::cout << "Output directory: " << outputDir << std::endl;
-    std::cout << "Done!" << std::endl;
-    // system("pause");
-
-    return 0;
-}
-
-// ============================================================
-// 辅助函数: 打印点信息
-// ============================================================
-void printPoint(const LSPointXYZRGB& point) {
-    std::cout << "Point: ("
-        << point.x << ", "
-        << point.y << ", "
-        << point.z << ") Color: ("
-        << (int)point.r << ", "
-        << (int)point.g << ", "
-        << (int)point.b << ")" << std::endl;
-}
-
-void printPointWithNormal(const LSPointXYZN& point) {
-    std::cout << "Point: ("
-        << point.x << ", "
-        << point.y << ", "
-        << point.z << ") Normal: ("
-        << point.nX << ", "
-        << point.nY << ", "
-        << point.nZ << ")" << std::endl;
-}
-
-// ============================================================
-// 示例: 带过滤条件的迭代
-// ============================================================
-void exampleWithFilter(ref_ptr<LSScan> scan) {
-    // 加载数据
-    scan->loadData(LSScan::AUTO);
-
-    // 获取迭代器
-    LSScanIterator<LSPointXYZRGB> iterator = scan->getScanIterator();
-
-    // 定义过滤函数 - 只保留 z > 0 的点
-    auto filter = [](const LSPointXYZRGB& point) -> bool {
-        return point.z > 0.0;
-        };
-
-    // 应用过滤
-    LSIterator<LSPointXYZRGB> filteredIterator = iterator.where(filter);
-
-    // 遍历过滤后的点
-    uint64_t count = 0;
-    while (filteredIterator.moveNext()) {
-        LSPointXYZRGB point = filteredIterator.getCurrent();
-        // 处理点...
-        count++;
-    }
-
-    std::cout << "Filtered points count: " << count << std::endl;
-
-    scan->unloadData();
+    std::cout << "\nDone! Processed " << successCount << "/" << inputFiles.size() << " files." << std::endl;
+    return (successCount == static_cast<int>(inputFiles.size())) ? 0 : 1;
 }
