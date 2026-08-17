@@ -23,7 +23,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Windows特定设置
 if(WIN32)
     add_definitions(-DUNICODE -D_UNICODE)
-    add_compile_options(/W3 /EHsc /Zc:wchar_t /Zc:inline /permissive-)
+    add_compile_options(/W3 /EHsc /Zc:wchar_t /Zc:inline /permissive- /utf-8)
     
     # 关闭增量链接，减少部署问题
     set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /INCREMENTAL:NO")

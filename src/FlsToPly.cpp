@@ -1,47 +1,110 @@
-// StringConverter.h
-#pragma once
-
+// FlsToPly.cpp
 #include "FlsToPly.h"
+#include <cmath>
+#include <algorithm>
 
-// ½«fls×ª³ÉrgbµãÔÆÎÄ¼ş
+// å°† [0,1] å¼ºåº¦å€¼æ˜ å°„ä¸ºä¼ªå½©è‰² (jetè‰²è°±)
+static void intensityToColor(float t, uint8_t& r, uint8_t& g, uint8_t& b)
+{
+    t = std::max(0.0f, std::min(1.0f, t));
+    // jetè‰²è°±: è“ -> é’ -> ç»¿ -> é»„ -> çº¢
+    float rVal, gVal, bVal;
+    if (t < 0.25f) {
+        rVal = 0.0f;
+        gVal = t * 4.0f;
+        bVal = 1.0f;
+    } else if (t < 0.5f) {
+        rVal = 0.0f;
+        gVal = 1.0f;
+        bVal = 1.0f - (t - 0.25f) * 4.0f;
+    } else if (t < 0.75f) {
+        rVal = (t - 0.5f) * 4.0f;
+        gVal = 1.0f;
+        bVal = 0.0f;
+    } else {
+        rVal = 1.0f;
+        gVal = 1.0f - (t - 0.75f) * 4.0f;
+        bVal = 0.0f;
+    }
+    r = static_cast<uint8_t>(rVal * 255.0f + 0.5f);
+    g = static_cast<uint8_t>(gVal * 255.0f + 0.5f);
+    b = static_cast<uint8_t>(bVal * 255.0f + 0.5f);
+}
+
+// å°†flsè½¬æ¢ä¸ºrgbé¢œè‰²æ–‡ä»¶
 std::string FlsToPly::transToPlyRgb(const ref_ptr<LSScan> scan, const std::string outputPath)
 {
     std::cout << "\nReading and saving RGB point cloud..." << std::endl;
-    LSScanIterator<LSPointXYZRGB> scanIterator = scan->getScanIterator();
+
+    bool hasColor = scan->dataAvailable(LSScan::COLOR);
+    bool hasReflection = scan->dataAvailable(LSScan::REFLECTION);
+    std::cout << "Color data available: " << (hasColor ? "Yes" : "No") << std::endl;
+    std::cout << "Reflection data available: " << (hasReflection ? "Yes" : "No") << std::endl;
+
+    if (!hasColor && !hasReflection) {
+        std::cerr << "Warning: No color or reflection data available for this scan." << std::endl;
+        return "";
+    }
 
     std::vector<LSPointXYZRGB> rgbPoints;
-    rgbPoints.reserve(1000000);  // Ô¤·ÖÅä¿Õ¼ä
-
+    rgbPoints.reserve(1000000);
     uint64_t pointCount = 0;
-    while (scanIterator.moveNext()) {
-        LSPointXYZRGB point = scanIterator.getCurrent();
-        rgbPoints.push_back(point);
-        pointCount++;
 
-        if (pointCount % 100000 == 0) {
-            std::cout << "Collected " << pointCount << " RGB points..." << std::endl;
+    if (hasColor) {
+        std::cout << "Using real camera RGB data." << std::endl;
+        LSScanIterator<LSPointXYZRGB> scanIterator = scan->getScanIterator();
+        while (scanIterator.moveNext()) {
+            rgbPoints.push_back(scanIterator.getCurrent());
+            pointCount++;
+            if (pointCount % 100000 == 0) {
+                std::cout << "Collected " << pointCount << " RGB points..." << std::endl;
+            }
+        }
+    }
+    else if (hasReflection) {
+        std::cout << "No camera color. Applying false-color map to reflection intensity." << std::endl;
+        LSScanIterator<LSPointXYZI> reflIterator = scan->getScanReflectionIterator();
+
+        // ç¬¬ä¸€éï¼šæ”¶é›†å¼ºåº¦å€¼ï¼Œæ‰¾åˆ°æœ€å°æœ€å¤§å€¼
+        std::vector<LSPointXYZI> reflPoints;
+        reflPoints.reserve(1000000);
+        float minI = 1e30f, maxI = -1e30f;
+        while (reflIterator.moveNext()) {
+            LSPointXYZI p = reflIterator.getCurrent();
+            reflPoints.push_back(p);
+            if (p.i < minI) minI = p.i;
+            if (p.i > maxI) maxI = p.i;
+            pointCount++;
+        }
+        std::cout << "Intensity range: [" << minI << ", " << maxI << "]" << std::endl;
+
+        // ç¬¬äºŒéï¼šæ˜ å°„ä¼ªå½©è‰²
+        float range = maxI - minI;
+        if (range < 1e-6f) range = 1.0f;
+        rgbPoints.resize(reflPoints.size());
+        for (size_t idx = 0; idx < reflPoints.size(); ++idx) {
+            const auto& p = reflPoints[idx];
+            rgbPoints[idx].x = p.x;
+            rgbPoints[idx].y = p.y;
+            rgbPoints[idx].z = p.z;
+            float t = (p.i - minI) / range;
+            intensityToColor(t, rgbPoints[idx].r, rgbPoints[idx].g, rgbPoints[idx].b);
         }
     }
 
-    std::cout << "Total RGB points collected: " << pointCount << std::endl;
+    std::cout << "Total points collected: " << pointCount << std::endl;
 
-    // ±£´æµ½PLYÎÄ¼ş
-    /* std::string plyFilename = outputDir + "\\scan_" + std::to_string(1) + "_rgb.ply";
-    if (savePointCloudToPLY(plyFilename, rgbPoints, false)) {  // Ê¹ÓÃASCII¸ñÊ½
-        std::cout << "RGB point cloud saved to: " << plyFilename << std::endl;
-    }*/
-
-    // ¿ÉÑ¡£º±£´æ¶ş½øÖÆ¸ñÊ½
-    // std::string plyBinaryFilename = outputDir + "\\scan_" + std::to_string(i + 1) + "_rgb_binary.ply";
-    savePointCloudToPLY(outputPath, rgbPoints, true);
+    if (pointCount > 0) {
+        savePointCloudToPLY(outputPath, rgbPoints, true);
+    }
     return outputPath;
 }
 
-// ½«fls×ª³É´ø·¨ÏòÁ¿µÄµãÔÆÎÄ¼ş
+// å°†flsè½¬æ¢ä¸ºå¸¦æ³•å‘é‡çš„ç‚¹äº‘æ–‡ä»¶
 std::string FlsToPly::transToPlyNormals(const ref_ptr<LSScan> scan, const std::string outputPath)
 {
     std::cout << "\nReading and saving point cloud with normals..." << std::endl;
-    // »ñÈ¡´ø·¨ÏòÁ¿µÄÉ¨Ãèµü´úÆ÷
+    // è·å–å¸¦æ³•å‘é‡çš„æ‰«æè¿­ä»£å™¨
     LSScanIterator<LSPointXYZN> normalIterator = scan->getScanNormalsIterator();
 
     std::vector<LSPointXYZN> normalPoints;
@@ -69,10 +132,16 @@ std::string FlsToPly::transToPlyNormals(const ref_ptr<LSScan> scan, const std::s
     return outputPath;
 }
 
-// ½«fls×ª³É´ø·´ÉäÇ¿¶ÈµÄµãÔÆÎÄ¼ş
+// å°†flsè½¬æ¢ä¸ºå¸¦åå°„å¼ºåº¦çš„ç‚¹äº‘æ–‡ä»¶
 std::string FlsToPly::transToPlyIntensity(const ref_ptr<LSScan> scan, const std::string outputPath)
 {
     std::cout << "\nReading and saving reflection data..." << std::endl;
+
+    if (!scan->dataAvailable(LSScan::REFLECTION)) {
+        std::cerr << "Warning: No reflection data available for this scan." << std::endl;
+        return "";
+    }
+
     LSScanIterator<LSPointXYZI> reflectionIterator = scan->getScanReflectionIterator();
 
     std::vector<LSPointXYZI> intensityPoints;
@@ -100,14 +169,14 @@ std::string FlsToPly::transToPlyIntensity(const ref_ptr<LSScan> scan, const std:
     return outputPath;
 }
 
-// ½«fls×ª³ÉÇò×ø±êµãÔÆÎÄ¼ş
+// å°†flsè½¬æ¢ä¸ºçƒåæ ‡æ–‡ä»¶
 std::string FlsToPly::transToPlySpherical(const ref_ptr<LSScan> scan, const std::string outputPath)
 {
     std::cout << "\nReading and saving spherical coordinates..." << std::endl;
-    // »ñÈ¡Çò×ø±êµü´úÆ÷
+    // è·å–çƒåæ ‡è¿­ä»£å™¨
     LSSphericalIterator<LSPointSphericalRGB> sphericalIterator = scan->getSphericalCoordinatesIterator();
 
-    // ×¢Òâ£ºÇò×ø±êµãĞèÒª×ª»»ÎªµÑ¿¨¶û×ø±ê±£´æ
+    // æ³¨æ„ï¼šçƒåæ ‡ç‚¹éœ€è¦è½¬æ¢ä¸ºç¬›å¡å°”åæ ‡ä¿å­˜
     std::vector<LSPointXYZRGB> sphericalPoints;
     sphericalPoints.reserve(1000000);
 
@@ -115,10 +184,10 @@ std::string FlsToPly::transToPlySpherical(const ref_ptr<LSScan> scan, const std:
     while (sphericalIterator.moveNext()) {
         LSPointSphericalRGB sphericalPoint = sphericalIterator.getCurrent();
 
-        // ½«Çò×ø±ê×ª»»ÎªµÑ¿¨¶û×ø±ê
+        // å°†çƒåæ ‡è½¬æ¢ä¸ºç¬›å¡å°”åæ ‡
         double radius = sphericalPoint.radius;
-        double phi = sphericalPoint.phi;     // ·½Î»½Ç
-        double theta = sphericalPoint.theta; // ¼«½Ç
+        double phi = sphericalPoint.phi;     // æ–¹ä½è§’
+        double theta = sphericalPoint.theta; // æè§’
 
         LSPointXYZRGB cartesianPoint;
         cartesianPoint.x = radius * sin(theta) * cos(phi);
@@ -149,17 +218,17 @@ std::string FlsToPly::transToPlySpherical(const ref_ptr<LSScan> scan, const std:
 
 std::string FlsToPly::transToPlyProject(const ref_ptr<LSProject> project, const std::string outputPath)
 {
-    // ´´½¨ÏîÄ¿µãÔÆ (ºÏ²¢ËùÓĞÉ¨Ãè)
+    // åˆ›å»ºé¡¹ç›®ç‚¹äº‘ (åˆå¹¶æ‰€æœ‰æ‰«æ)
     LSResult::Result result = project->createPointCloud();
     if (result == LSResult::Ok) {
         std::cout << "\nProject point cloud created successfully." << std::endl;
 
-        // »ñÈ¡ÏîÄ¿µãÔÆ
+        // è·å–é¡¹ç›®ç‚¹äº‘
         ref_ptr<LSPointCloud> pointCloud = project->getPointCloud();
         if (pointCloud) {
             std::cout << "Reading and saving project point cloud..." << std::endl;
 
-            // »ñÈ¡µãÔÆµü´úÆ÷
+            // è·å–ç‚¹äº‘çš„è¿­ä»£å™¨
             LSIterator<LSPointXYZRGB> pcIterator = pointCloud->getPointCloudIterator();
 
             std::vector<LSPointXYZRGB> projectPoints;
@@ -184,7 +253,7 @@ std::string FlsToPly::transToPlyProject(const ref_ptr<LSProject> project, const 
                     std::cout << "Project point cloud saved to: " << outputPath << std::endl;
                 }
 
-                // ¿ÉÑ¡£º±£´æ¶ş½øÖÆ¸ñÊ½
+                // å¯é€‰ï¼šä¿å­˜ä¸ºäºŒè¿›åˆ¶æ ¼å¼
                 // std::string plyBinaryFilename = outputDir + "\\project_merged_pointcloud_binary.ply";
                 // savePointCloudToPLY(plyBinaryFilename, projectPoints, true);
             }
@@ -194,14 +263,14 @@ std::string FlsToPly::transToPlyProject(const ref_ptr<LSProject> project, const 
 }
 
 /**
- * @brief ±£´æXYZRGBµãÔÆµ½PLYÎÄ¼ş
- * @param filename Òª±£´æµÄÎÄ¼şÃû
- * @param points µã¼¯
- * @param binary ÊÇ·ñ±£´æÎª¶ş½øÖÆµãÔÆ
+ * @brief ä¿å­˜XYZRGBç‚¹äº‘åˆ°PLYæ–‡ä»¶
+ * @param filename è¦ä¿å­˜çš„æ–‡ä»¶å
+ * @param points ç‚¹é›†
+ * @param binary æ˜¯å¦ä¿å­˜ä¸ºäºŒè¿›åˆ¶æ ¼å¼
  */
 bool FlsToPly::savePointCloudToPLY(const std::string& filename,
     const std::vector<LSPointXYZRGB>& points,
-    bool binary = false) {
+    bool binary) {
     std::ofstream file;
     if (binary) {
         file.open(filename, std::ios::binary);
@@ -215,7 +284,7 @@ bool FlsToPly::savePointCloudToPLY(const std::string& filename,
         return false;
     }
 
-    // Ğ´ÈëPLYÍ·²¿
+    // å†™å…¥PLYå¤´éƒ¨
     file << "ply\n";
     if (binary) {
         file << "format binary_little_endian 1.0\n";
@@ -232,10 +301,10 @@ bool FlsToPly::savePointCloudToPLY(const std::string& filename,
     file << "property uchar blue\n";
     file << "end_header\n";
 
-    // Ğ´ÈëµãÊı¾İ
+    // å†™å…¥ç‚¹æ•°æ®
     if (binary) {
         for (const auto& point : points) {
-            // Ğ´Èë×ø±ê£¨float¸ñÊ½£©
+            // å†™å…¥åæ ‡ï¼ˆfloatæ ¼å¼ï¼‰
             float x = static_cast<float>(point.x);
             float y = static_cast<float>(point.y);
             float z = static_cast<float>(point.z);
@@ -243,14 +312,14 @@ bool FlsToPly::savePointCloudToPLY(const std::string& filename,
             file.write(reinterpret_cast<const char*>(&y), sizeof(float));
             file.write(reinterpret_cast<const char*>(&z), sizeof(float));
 
-            // Ğ´ÈëÑÕÉ«
+            // å†™å…¥é¢œè‰²
             file.write(reinterpret_cast<const char*>(&point.r), sizeof(uint8_t));
             file.write(reinterpret_cast<const char*>(&point.g), sizeof(uint8_t));
             file.write(reinterpret_cast<const char*>(&point.b), sizeof(uint8_t));
         }
     }
     else {
-        // ASCII¸ñÊ½
+        // ASCIIæ ¼å¼
         file << std::fixed << std::setprecision(6);
         for (const auto& point : points) {
             file << point.x << " " << point.y << " " << point.z << " "
@@ -266,11 +335,11 @@ bool FlsToPly::savePointCloudToPLY(const std::string& filename,
 }
 
 /**
- * ±£´æ´ø·¨ÏòÁ¿µÄµãÔÆµ½PLYÎÄ¼ş
+ * ä¿å­˜å¸¦æ³•å‘é‡çš„ç‚¹äº‘åˆ°PLYæ–‡ä»¶
  */
 bool FlsToPly::savePointCloudWithNormalsToPLY(const std::string& filename,
     const std::vector<LSPointXYZN>& points,
-    bool binary = false) {
+    bool binary) {
     std::ofstream file;
     if (binary) {
         file.open(filename, std::ios::binary);
@@ -284,7 +353,7 @@ bool FlsToPly::savePointCloudWithNormalsToPLY(const std::string& filename,
         return false;
     }
 
-    // Ğ´ÈëPLYÍ·²¿
+    // å†™å…¥PLYå¤´éƒ¨
     file << "ply\n";
     if (binary) {
         file << "format binary_little_endian 1.0\n";
@@ -301,10 +370,10 @@ bool FlsToPly::savePointCloudWithNormalsToPLY(const std::string& filename,
     file << "property float nz\n";
     file << "end_header\n";
 
-    // Ğ´ÈëµãÊı¾İ
+    // å†™å…¥ç‚¹æ•°æ®
     if (binary) {
         for (const auto& point : points) {
-            // Ğ´Èë×ø±ê£¨float¸ñÊ½£©
+            // å†™å…¥åæ ‡ï¼ˆfloatæ ¼å¼ï¼‰
             float x = static_cast<float>(point.x);
             float y = static_cast<float>(point.y);
             float z = static_cast<float>(point.z);
@@ -312,7 +381,7 @@ bool FlsToPly::savePointCloudWithNormalsToPLY(const std::string& filename,
             file.write(reinterpret_cast<const char*>(&y), sizeof(float));
             file.write(reinterpret_cast<const char*>(&z), sizeof(float));
 
-            // Ğ´Èë·¨ÏòÁ¿
+            // å†™å…¥æ³•å‘é‡
             float nx = point.nX;
             float ny = point.nY;
             float nz = point.nZ;
@@ -322,7 +391,7 @@ bool FlsToPly::savePointCloudWithNormalsToPLY(const std::string& filename,
         }
     }
     else {
-        // ASCII¸ñÊ½
+        // ASCIIæ ¼å¼
         file << std::fixed << std::setprecision(6);
         for (const auto& point : points) {
             file << point.x << " " << point.y << " " << point.z << " "
@@ -336,11 +405,11 @@ bool FlsToPly::savePointCloudWithNormalsToPLY(const std::string& filename,
 }
 
 /**
- * ±£´æ´ø·´ÉäÇ¿¶ÈµÄµãÔÆµ½PLYÎÄ¼ş
+ * ä¿å­˜å¸¦åå°„å¼ºåº¦çš„ç‚¹äº‘åˆ°PLYæ–‡ä»¶
  */
 bool FlsToPly::savePointCloudWithIntensityToPLY(const std::string& filename,
     const std::vector<LSPointXYZI>& points,
-    bool binary = false) {
+    bool binary) {
     std::ofstream file;
     if (binary) {
         file.open(filename, std::ios::binary);
@@ -354,7 +423,7 @@ bool FlsToPly::savePointCloudWithIntensityToPLY(const std::string& filename,
         return false;
     }
 
-    // Ğ´ÈëPLYÍ·²¿
+    // å†™å…¥PLYå¤´éƒ¨
     file << "ply\n";
     if (binary) {
         file << "format binary_little_endian 1.0\n";
@@ -369,10 +438,10 @@ bool FlsToPly::savePointCloudWithIntensityToPLY(const std::string& filename,
     file << "property float intensity\n";
     file << "end_header\n";
 
-    // Ğ´ÈëµãÊı¾İ
+    // å†™å…¥ç‚¹æ•°æ®
     if (binary) {
         for (const auto& point : points) {
-            // Ğ´Èë×ø±ê£¨float¸ñÊ½£©
+            // å†™å…¥åæ ‡ï¼ˆfloatæ ¼å¼ï¼‰
             float x = static_cast<float>(point.x);
             float y = static_cast<float>(point.y);
             float z = static_cast<float>(point.z);
@@ -380,13 +449,13 @@ bool FlsToPly::savePointCloudWithIntensityToPLY(const std::string& filename,
             file.write(reinterpret_cast<const char*>(&y), sizeof(float));
             file.write(reinterpret_cast<const char*>(&z), sizeof(float));
 
-            // Ğ´Èë·´ÉäÇ¿¶È
+            // å†™å…¥åå°„å¼ºåº¦
             float intensity = point.i;
             file.write(reinterpret_cast<const char*>(&intensity), sizeof(float));
         }
     }
     else {
-        // ASCII¸ñÊ½
+        // ASCIIæ ¼å¼
         file << std::fixed << std::setprecision(6);
         for (const auto& point : points) {
             file << point.x << " " << point.y << " " << point.z << " "

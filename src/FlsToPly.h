@@ -1,9 +1,9 @@
-// StringConverter.h
+// FlsToPly.h
 #pragma once
 
 #include <iostream>
 #include <filesystem>
-#include <fstream>     // Ìí¼ÓÎÄ¼şÁ÷Í·ÎÄ¼ş
+#include <fstream>
 #include <iomanip>
 #include <core_api/lsproject.h>
 #include <core_api/lsscan.h>
@@ -13,42 +13,42 @@ using namespace SCENE_API;
 class FlsToPly
 {
 public:
-    // ½«fls×ª³ÉrgbµãÔÆÎÄ¼ş
+    // å°†flsè½¬æ¢ä¸ºrgbé¢œè‰²æ–‡ä»¶
     static std::string transToPlyRgb(const ref_ptr<LSScan> scan, const std::string outputPath);
 
-    // ½«fls×ª³É´ø·¨ÏòÁ¿µÄµãÔÆÎÄ¼ş
+    // å°†flsè½¬æ¢ä¸ºå¸¦æ³•å‘é‡çš„ç‚¹äº‘æ–‡ä»¶
     static std::string transToPlyNormals(const ref_ptr<LSScan> scan, const std::string outputPath);
 
-    // ½«fls×ª³É´ø·´ÉäÇ¿¶ÈµÄµãÔÆÎÄ¼ş
+    // å°†flsè½¬æ¢ä¸ºå¸¦åå°„å¼ºåº¦çš„ç‚¹äº‘æ–‡ä»¶
     static std::string transToPlyIntensity(const ref_ptr<LSScan> scan, const std::string outputPath);
 
-    // ½«fls×ª³ÉÇò×ø±êµãÔÆÎÄ¼ş
+    // å°†flsè½¬æ¢ä¸ºçƒåæ ‡æ–‡ä»¶
     static std::string transToPlySpherical(const ref_ptr<LSScan> scan, const std::string outputPath);
 
-    // ½«ÏîÄ¿fls×ª³ÉÏîÄ¿µãÔÆÎÄ¼ş
+    // å°†é¡¹ç›®flsè½¬æ¢ä¸ºé¡¹ç›®ç‚¹äº‘æ–‡ä»¶
     static std::string transToPlyProject(const ref_ptr<LSProject> project, const std::string outputPath);
 
 
 
     /**
-     * @brief ±£´æXYZRGBµãÔÆµ½PLYÎÄ¼ş
-     * @param filename Òª±£´æµÄÎÄ¼şÃû
-     * @param points RGBµã¼¯
-     * @param binary ÊÇ·ñ±£´æÎª¶ş½øÖÆµãÔÆ
+     * @brief ä¿å­˜XYZRGBç‚¹äº‘åˆ°PLYæ–‡ä»¶
+     * @param filename è¦ä¿å­˜çš„æ–‡ä»¶å
+     * @param points RGBç‚¹é›†
+     * @param binary æ˜¯å¦ä¿å­˜ä¸ºäºŒè¿›åˆ¶æ ¼å¼
      */
     static bool savePointCloudToPLY(const std::string&,
         const std::vector<LSPointXYZRGB>&,
         bool binary);
 
     /**
-     * ±£´æ´ø·¨ÏòÁ¿µÄµãÔÆµ½PLYÎÄ¼ş
+     * ä¿å­˜å¸¦æ³•å‘é‡çš„ç‚¹äº‘åˆ°PLYæ–‡ä»¶
      */
     static bool savePointCloudWithNormalsToPLY(const std::string&,
         const std::vector<LSPointXYZN>&,
         bool binary);
 
     /**
-     * ±£´æ´ø·´ÉäÇ¿¶ÈµÄµãÔÆµ½PLYÎÄ¼ş
+     * ä¿å­˜å¸¦åå°„å¼ºåº¦çš„ç‚¹äº‘åˆ°PLYæ–‡ä»¶
      */
     static bool savePointCloudWithIntensityToPLY(const std::string&,
         const std::vector<LSPointXYZI>&,

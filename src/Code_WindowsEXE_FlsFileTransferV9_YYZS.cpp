@@ -276,6 +276,9 @@ static bool processFile(const std::string& inputFile, const std::string& outputF
 // ──────────────────────────────────────────────
 int main(int argc, char* argv[])
 {
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+
     ArgumentParser parser;
     auto options = parser.parse(argc, argv);
 
@@ -342,6 +345,7 @@ int main(int argc, char* argv[])
     const FormatEntry* fmtEntry = lookupFormat(options.format);
     const char* ext = fmtEntry ? fmtEntry->ext : ".ply";
     int successCount = 0;
+    std::vector<std::string> convertedFiles;
 
     // ── Process each input file ──
     for (const auto& inputFile : inputFiles)
@@ -367,6 +371,7 @@ int main(int argc, char* argv[])
         if (processFile(inputFile, outputPath, options.format, context))
         {
             ++successCount;
+            convertedFiles.push_back(outputPath);
         }
     }
 
@@ -374,5 +379,15 @@ int main(int argc, char* argv[])
     delete context;
 
     std::cout << "\nDone! Processed " << successCount << "/" << inputFiles.size() << " files." << std::endl;
+
+    if (!convertedFiles.empty())
+    {
+        std::cout << "\nConverted files:" << std::endl;
+        for (const auto& f : convertedFiles)
+        {
+            std::cout << "  " << f << std::endl;
+        }
+    }
+
     return (successCount == static_cast<int>(inputFiles.size())) ? 0 : 1;
 }
