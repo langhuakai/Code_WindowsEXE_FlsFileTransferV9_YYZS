@@ -40,10 +40,31 @@ std::string FlsToPly::transToPlyRgb(const ref_ptr<LSScan> scan, const std::strin
     bool hasReflection = scan->dataAvailable(LSScan::REFLECTION);
     std::cout << "Color data available: " << (hasColor ? "Yes" : "No") << std::endl;
     std::cout << "Reflection data available: " << (hasReflection ? "Yes" : "No") << std::endl;
+    std::cout << "Total rows: " << scan->getNumRows() << ", cols: " << scan->getNumCols() << std::endl;
 
     if (!hasColor && !hasReflection) {
         std::cerr << "Warning: No color or reflection data available for this scan." << std::endl;
         return "";
+    }
+
+    // 诊断: 检查几个不同位置的点的颜色
+    if (hasColor && scan->getNumRows() > 0 && scan->getNumCols() > 0) {
+        int testRows[] = {0, scan->getNumRows()/4, scan->getNumRows()/2, scan->getNumRows()-1};
+        int testCols[] = {0, scan->getNumCols()/4, scan->getNumCols()/2, scan->getNumCols()-1};
+        std::cout << "\nDiagnostic point colors (row, col) -> RGB:" << std::endl;
+        for (int r : testRows) {
+            for (int c : testCols) {
+                uint8_t rVal, gVal, bVal;
+                bool isRGB = false;
+                if (scan->getPointColor(c, r, rVal, gVal, bVal, isRGB)) {
+                    std::cout << "  (" << r << "," << c << ") -> rgb=("
+                              << static_cast<int>(rVal) << ","
+                              << static_cast<int>(gVal) << ","
+                              << static_cast<int>(bVal) << ") isRGB=" << (isRGB ? "true" : "false") << std::endl;
+                }
+            }
+        }
+        std::cout << std::endl;
     }
 
     std::vector<LSPointXYZRGB> rgbPoints;
@@ -52,43 +73,28 @@ std::string FlsToPly::transToPlyRgb(const ref_ptr<LSScan> scan, const std::strin
 
     if (hasColor) {
         std::cout << "Using real camera RGB data." << std::endl;
-        LSScanIterator<LSPointXYZRGB> scanIterator = scan->getScanIterator();
-        while (scanIterator.moveNext()) {
-            rgbPoints.push_back(scanIterator.getCurrent());
-            pointCount++;
-            if (pointCount % 100000 == 0) {
-                std::cout << "Collected " << pointCount << " RGB points..." << std::endl;
-            }
+    } else {
+        std::cout << "No camera color. Will apply false-color map." << std::endl;
+    }
+
+    // 统一用 getScanIterator 获取 RGB 点
+    // 有颜色时返回真实 RGB，无颜色时 SDK 做对比度增强返回灰度 RGB
+    LSScanIterator<LSPointXYZRGB> scanIterator = scan->getScanIterator();
+    while (scanIterator.moveNext()) {
+        rgbPoints.push_back(scanIterator.getCurrent());
+        pointCount++;
+        if (pointCount % 100000 == 0) {
+            std::cout << "Collected " << pointCount << " points..." << std::endl;
         }
     }
-    else if (hasReflection) {
-        std::cout << "No camera color. Applying false-color map to reflection intensity." << std::endl;
-        LSScanIterator<LSPointXYZI> reflIterator = scan->getScanReflectionIterator();
 
-        // 第一遍：收集强度值，找到最小最大值
-        std::vector<LSPointXYZI> reflPoints;
-        reflPoints.reserve(1000000);
-        float minI = 1e30f, maxI = -1e30f;
-        while (reflIterator.moveNext()) {
-            LSPointXYZI p = reflIterator.getCurrent();
-            reflPoints.push_back(p);
-            if (p.i < minI) minI = p.i;
-            if (p.i > maxI) maxI = p.i;
-            pointCount++;
-        }
-        std::cout << "Intensity range: [" << minI << ", " << maxI << "]" << std::endl;
-
-        // 第二遍：映射伪彩色
-        float range = maxI - minI;
-        if (range < 1e-6f) range = 1.0f;
-        rgbPoints.resize(reflPoints.size());
-        for (size_t idx = 0; idx < reflPoints.size(); ++idx) {
-            const auto& p = reflPoints[idx];
-            rgbPoints[idx].x = p.x;
-            rgbPoints[idx].y = p.y;
-            rgbPoints[idx].z = p.z;
-            float t = (p.i - minI) / range;
-            intensityToColor(t, rgbPoints[idx].r, rgbPoints[idx].g, rgbPoints[idx].b);
+    // 如果没有真实颜色，对灰度值应用伪彩色
+    if (!hasColor && pointCount > 0) {
+        std::cout << "Applying false-color map to contrast-enhanced grayscale..." << std::endl;
+        for (auto& pt : rgbPoints) {
+            // 灰度值取 RGB 三通道平均
+            float gray = (static_cast<float>(pt.r) + static_cast<float>(pt.g) + static_cast<float>(pt.b)) / 3.0f / 255.0f;
+            intensityToColor(gray, pt.r, pt.g, pt.b);
         }
     }
 

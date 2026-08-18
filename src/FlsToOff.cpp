@@ -68,40 +68,24 @@ std::string FlsToOff::transToOff(const ref_ptr<LSScan> scan, const std::string o
 
     if (hasColor) {
         std::cout << "Using real camera RGB data." << std::endl;
-        LSScanIterator<LSPointXYZRGB> scanIterator = scan->getScanIterator();
-        while (scanIterator.moveNext()) {
-            points.push_back(scanIterator.getCurrent());
-            ++pointCount;
-            if (pointCount % 100000 == 0) {
-                std::cout << "Collected " << pointCount << " points..." << std::endl;
-            }
+    } else {
+        std::cout << "No camera color. Will apply false-color map." << std::endl;
+    }
+
+    LSScanIterator<LSPointXYZRGB> scanIterator = scan->getScanIterator();
+    while (scanIterator.moveNext()) {
+        points.push_back(scanIterator.getCurrent());
+        ++pointCount;
+        if (pointCount % 100000 == 0) {
+            std::cout << "Collected " << pointCount << " points..." << std::endl;
         }
     }
-    else if (hasReflection) {
-        std::cout << "No camera color. Applying false-color map to reflection intensity." << std::endl;
-        LSScanIterator<LSPointXYZI> reflIterator = scan->getScanReflectionIterator();
 
-        std::vector<LSPointXYZI> reflPoints;
-        reflPoints.reserve(1000000);
-        float minI = 1e30f, maxI = -1e30f;
-        while (reflIterator.moveNext()) {
-            LSPointXYZI p = reflIterator.getCurrent();
-            reflPoints.push_back(p);
-            if (p.i < minI) minI = p.i;
-            if (p.i > maxI) maxI = p.i;
-            pointCount++;
-        }
-
-        float range = maxI - minI;
-        if (range < 1e-6f) range = 1.0f;
-        points.resize(reflPoints.size());
-        for (size_t idx = 0; idx < reflPoints.size(); ++idx) {
-            const auto& p = reflPoints[idx];
-            points[idx].x = p.x;
-            points[idx].y = p.y;
-            points[idx].z = p.z;
-            float t = (p.i - minI) / range;
-            intensityToColor(t, points[idx].r, points[idx].g, points[idx].b);
+    if (!hasColor && pointCount > 0) {
+        std::cout << "Applying false-color map to contrast-enhanced grayscale..." << std::endl;
+        for (auto& pt : points) {
+            float gray = (static_cast<float>(pt.r) + static_cast<float>(pt.g) + static_cast<float>(pt.b)) / 3.0f / 255.0f;
+            intensityToColor(gray, pt.r, pt.g, pt.b);
         }
     }
 

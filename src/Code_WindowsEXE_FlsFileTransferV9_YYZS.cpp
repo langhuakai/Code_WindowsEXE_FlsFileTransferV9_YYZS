@@ -17,6 +17,7 @@
 #include <core_api/lsworkspace.h>
 #include <core_api/lsobject.h>
 #include <core_api/lsscan.h>
+#include <core_api/lsprocessing.h>
 #include <core_api/lspointcloud.h>
 #include <core_api/lspointtypes.h>
 #include <core_api/lsiterator.h>
@@ -227,6 +228,13 @@ static bool processFile(const std::string& inputFile, const std::string& outputF
     }
     std::cout << "FLS file imported successfully." << std::endl;
 
+    result = project->saveRevision(L"Imported FLS", L"API");
+    if (result != LSResult::Ok) {
+        std::cerr << "Warning: Failed to save project revision. Error code: " << result << std::endl;
+    } else {
+        std::cout << "Project saved successfully." << std::endl;
+    }
+
     LSPod<std::vector<ref_ptr<LSScan>>> scans = project->getScans();
     if (scans.get().empty()) {
         std::cerr << "No scans found in project." << std::endl;
@@ -249,13 +257,44 @@ static bool processFile(const std::string& inputFile, const std::string& outputF
         ref_ptr<LSScan> scan = scans.get()[i];
         std::cout << "\n--- Scan " << (i + 1) << " ---" << std::endl;
 
-        result = scan->loadData(LSScan::AUTO);
+        // 步骤1: 先尝试 processScan 处理（含着色+创建点云）
+        LSResult::Result procResult = processScan(*scan, true);
+        std::cout << "processScan result: " << procResult
+                  << " (0=Ok, 1=Internal, 2=Unauthorized, 3=InvalidRequest)" << std::endl;
+
+        // 步骤2: 先卸载再重新加载，确保拿到处理后的数据
+        scan->unloadData();
+
+        // 步骤3: 尝试以 COLOR 格式加载（获取着色后的数据）
+        result = scan->loadData(LSScan::COLOR);
+        if (result != LSResult::Ok) {
+            std::cout << "loadData(COLOR) failed (" << result << "), trying AUTO..." << std::endl;
+            result = scan->loadData(LSScan::AUTO);
+        }
         if (result != LSResult::Ok) {
             std::cerr << "Failed to load scan data. Error code: " << result << std::endl;
-            if (result == LSResult::Unauthorized) {
-                std::cerr << "ERROR: API Key is invalid or missing!" << std::endl;
-            }
             continue;
+        }
+
+        bool hasColor = scan->dataAvailable(LSScan::COLOR);
+        bool hasReflect = scan->dataAvailable(LSScan::REFLECTION);
+        std::cout << "After reload - Color: " << (hasColor ? "Yes" : "No")
+                  << ", Reflection: " << (hasReflect ? "Yes" : "No") << std::endl;
+
+        // 步骤4: 如果还没有颜色，尝试 colorizeScan
+        if (!hasColor) {
+            LSResult::Result cr = colorizeScan(*scan);
+            std::cout << "colorizeScan result: " << cr << std::endl;
+            scan->unloadData();
+            result = scan->loadData(LSScan::COLOR);
+            if (result != LSResult::Ok) {
+                result = scan->loadData(LSScan::AUTO);
+            }
+            if (result == LSResult::Ok) {
+                hasColor = scan->dataAvailable(LSScan::COLOR);
+                std::cout << "After colorizeScan+reload - Color: "
+                          << (hasColor ? "Yes" : "No") << std::endl;
+            }
         }
 
         std::string scanOut = multiScan
