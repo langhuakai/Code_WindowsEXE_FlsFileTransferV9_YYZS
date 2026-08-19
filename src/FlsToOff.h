@@ -1,8 +1,10 @@
 #pragma once
 
+#define NOMINMAX
+#include <windows.h>
 #include <iostream>
+#include <sstream>
 #include <string>
-#include <fstream>
 #include <vector>
 #include <core_api/lsscan.h>
 #include <core_api/lspointtypes.h>

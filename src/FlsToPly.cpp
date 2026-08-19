@@ -1,108 +1,64 @@
 // FlsToPly.cpp
 #include "FlsToPly.h"
-#include <cmath>
-#include <algorithm>
 
-// 将 [0,1] 强度值映射为伪彩色 (jet色谱)
-static void intensityToColor(float t, uint8_t& r, uint8_t& g, uint8_t& b)
-{
-    t = std::max(0.0f, std::min(1.0f, t));
-    // jet色谱: 蓝 -> 青 -> 绿 -> 黄 -> 红
-    float rVal, gVal, bVal;
-    if (t < 0.25f) {
-        rVal = 0.0f;
-        gVal = t * 4.0f;
-        bVal = 1.0f;
-    } else if (t < 0.5f) {
-        rVal = 0.0f;
-        gVal = 1.0f;
-        bVal = 1.0f - (t - 0.25f) * 4.0f;
-    } else if (t < 0.75f) {
-        rVal = (t - 0.5f) * 4.0f;
-        gVal = 1.0f;
-        bVal = 0.0f;
-    } else {
-        rVal = 1.0f;
-        gVal = 1.0f - (t - 0.75f) * 4.0f;
-        bVal = 0.0f;
-    }
-    r = static_cast<uint8_t>(rVal * 255.0f + 0.5f);
-    g = static_cast<uint8_t>(gVal * 255.0f + 0.5f);
-    b = static_cast<uint8_t>(bVal * 255.0f + 0.5f);
-}
-
-// 将fls转换为rgb颜色文件
+// 将fls转换为ply点云（优先RGB，回退强度，最后纯坐标）
 std::string FlsToPly::transToPlyRgb(const ref_ptr<LSScan> scan, const std::string outputPath)
 {
-    std::cout << "\nReading and saving RGB point cloud..." << std::endl;
+    std::cout << "\nReading point cloud..." << std::endl;
 
     bool hasColor = scan->dataAvailable(LSScan::COLOR);
     bool hasReflection = scan->dataAvailable(LSScan::REFLECTION);
-    std::cout << "Color data available: " << (hasColor ? "Yes" : "No") << std::endl;
-    std::cout << "Reflection data available: " << (hasReflection ? "Yes" : "No") << std::endl;
-    std::cout << "Total rows: " << scan->getNumRows() << ", cols: " << scan->getNumCols() << std::endl;
+    std::cout << "Color: " << (hasColor ? "Yes" : "No")
+              << ", Reflection: " << (hasReflection ? "Yes" : "No") << std::endl;
 
-    if (!hasColor && !hasReflection) {
-        std::cerr << "Warning: No color or reflection data available for this scan." << std::endl;
-        return "";
-    }
-
-    // 诊断: 检查几个不同位置的点的颜色
-    if (hasColor && scan->getNumRows() > 0 && scan->getNumCols() > 0) {
-        int testRows[] = {0, scan->getNumRows()/4, scan->getNumRows()/2, scan->getNumRows()-1};
-        int testCols[] = {0, scan->getNumCols()/4, scan->getNumCols()/2, scan->getNumCols()-1};
-        std::cout << "\nDiagnostic point colors (row, col) -> RGB:" << std::endl;
-        for (int r : testRows) {
-            for (int c : testCols) {
-                uint8_t rVal, gVal, bVal;
-                bool isRGB = false;
-                if (scan->getPointColor(c, r, rVal, gVal, bVal, isRGB)) {
-                    std::cout << "  (" << r << "," << c << ") -> rgb=("
-                              << static_cast<int>(rVal) << ","
-                              << static_cast<int>(gVal) << ","
-                              << static_cast<int>(bVal) << ") isRGB=" << (isRGB ? "true" : "false") << std::endl;
-                }
-            }
-        }
-        std::cout << std::endl;
-    }
-
-    std::vector<LSPointXYZRGB> rgbPoints;
-    rgbPoints.reserve(1000000);
-    uint64_t pointCount = 0;
-
+    // 优先: 有真实颜色 -> RGB PLY
     if (hasColor) {
-        std::cout << "Using real camera RGB data." << std::endl;
-    } else {
-        std::cout << "No camera color. Will apply false-color map." << std::endl;
-    }
-
-    // 统一用 getScanIterator 获取 RGB 点
-    // 有颜色时返回真实 RGB，无颜色时 SDK 做对比度增强返回灰度 RGB
-    LSScanIterator<LSPointXYZRGB> scanIterator = scan->getScanIterator();
-    while (scanIterator.moveNext()) {
-        rgbPoints.push_back(scanIterator.getCurrent());
-        pointCount++;
-        if (pointCount % 100000 == 0) {
-            std::cout << "Collected " << pointCount << " points..." << std::endl;
+        std::cout << "Exporting RGB point cloud..." << std::endl;
+        LSScanIterator<LSPointXYZRGB> scanIterator = scan->getScanIterator();
+        std::vector<LSPointXYZRGB> points;
+        points.reserve(1000000);
+        uint64_t count = 0;
+        while (scanIterator.moveNext()) {
+            points.push_back(scanIterator.getCurrent());
+            count++;
+            if (count % 1000000 == 0)
+                std::cout << "  " << count << " points..." << std::endl;
         }
+        std::cout << "Total: " << count << " RGB points." << std::endl;
+        if (count > 0) savePointCloudToPLY(outputPath, points, true);
+        return outputPath;
     }
 
-    // 如果没有真实颜色，对灰度值应用伪彩色
-    if (!hasColor && pointCount > 0) {
-        std::cout << "Applying false-color map to contrast-enhanced grayscale..." << std::endl;
-        for (auto& pt : rgbPoints) {
-            // 灰度值取 RGB 三通道平均
-            float gray = (static_cast<float>(pt.r) + static_cast<float>(pt.g) + static_cast<float>(pt.b)) / 3.0f / 255.0f;
-            intensityToColor(gray, pt.r, pt.g, pt.b);
+    // 其次: 有反射强度 -> 强度 PLY
+    if (hasReflection) {
+        std::cout << "No camera color. Exporting intensity PLY..." << std::endl;
+        LSScanIterator<LSPointXYZI> reflIterator = scan->getScanReflectionIterator();
+        std::vector<LSPointXYZI> points;
+        points.reserve(1000000);
+        uint64_t count = 0;
+        while (reflIterator.moveNext()) {
+            points.push_back(reflIterator.getCurrent());
+            count++;
+            if (count % 1000000 == 0)
+                std::cout << "  " << count << " points..." << std::endl;
         }
+        std::cout << "Total: " << count << " intensity points." << std::endl;
+        if (count > 0) savePointCloudWithIntensityToPLY(outputPath, points, true);
+        return outputPath;
     }
 
-    std::cout << "Total points collected: " << pointCount << std::endl;
-
-    if (pointCount > 0) {
-        savePointCloudToPLY(outputPath, rgbPoints, true);
+    // 最后: 纯坐标 PLY（无颜色无强度）
+    std::cout << "No color or reflection. Exporting XYZ-only PLY..." << std::endl;
+    LSScanIterator<LSPointXYZRGB> fallbackIterator = scan->getScanIterator();
+    std::vector<LSPointXYZRGB> points;
+    points.reserve(1000000);
+    uint64_t count = 0;
+    while (fallbackIterator.moveNext()) {
+        points.push_back(fallbackIterator.getCurrent());
+        count++;
     }
+    std::cout << "Total: " << count << " points (no color)." << std::endl;
+    if (count > 0) savePointCloudToPLY(outputPath, points, true);
     return outputPath;
 }
 
@@ -110,7 +66,6 @@ std::string FlsToPly::transToPlyRgb(const ref_ptr<LSScan> scan, const std::strin
 std::string FlsToPly::transToPlyNormals(const ref_ptr<LSScan> scan, const std::string outputPath)
 {
     std::cout << "\nReading and saving point cloud with normals..." << std::endl;
-    // 获取带法向量的扫描迭代器
     LSScanIterator<LSPointXYZN> normalIterator = scan->getScanNormalsIterator();
 
     std::vector<LSPointXYZN> normalPoints;
@@ -118,22 +73,16 @@ std::string FlsToPly::transToPlyNormals(const ref_ptr<LSScan> scan, const std::s
 
     uint64_t pointCount = 0;
     while (normalIterator.moveNext()) {
-        LSPointXYZN point = normalIterator.getCurrent();
-        normalPoints.push_back(point);
+        normalPoints.push_back(normalIterator.getCurrent());
         pointCount++;
-
-        if (pointCount % 100000 == 0) {
-            std::cout << "Collected " << pointCount << " points with normals..." << std::endl;
-        }
+        if (pointCount % 1000000 == 0)
+            std::cout << "  " << pointCount << " points..." << std::endl;
     }
 
-    std::cout << "Total points with normals collected: " << pointCount << std::endl;
+    std::cout << "Total points with normals: " << pointCount << std::endl;
 
     if (pointCount > 0) {
-        // std::string plyFilename = outputDir + "\\scan_" + std::to_string(i + 1) + "_normals.ply";
-        if (savePointCloudWithNormalsToPLY(outputPath, normalPoints, false)) {
-            std::cout << "Point cloud with normals saved to: " << outputPath << std::endl;
-        }
+        savePointCloudWithNormalsToPLY(outputPath, normalPoints, true);
     }
     return outputPath;
 }
@@ -155,22 +104,16 @@ std::string FlsToPly::transToPlyIntensity(const ref_ptr<LSScan> scan, const std:
 
     uint64_t pointCount = 0;
     while (reflectionIterator.moveNext()) {
-        LSPointXYZI point = reflectionIterator.getCurrent();
-        intensityPoints.push_back(point);
+        intensityPoints.push_back(reflectionIterator.getCurrent());
         pointCount++;
-
-        if (pointCount % 100000 == 0) {
-            std::cout << "Collected " << pointCount << " intensity points..." << std::endl;
-        }
+        if (pointCount % 1000000 == 0)
+            std::cout << "  " << pointCount << " points..." << std::endl;
     }
 
-    std::cout << "Total points with reflection collected: " << pointCount << std::endl;
+    std::cout << "Total points with reflection: " << pointCount << std::endl;
 
     if (pointCount > 0) {
-        // std::string plyFilename = outputDir + "\\scan_" + std::to_string(i + 1) + "_intensity.ply";
-        if (savePointCloudWithIntensityToPLY(outputPath, intensityPoints, false)) {
-            std::cout << "Point cloud with intensity saved to: " << outputPath << std::endl;
-        }
+        savePointCloudWithIntensityToPLY(outputPath, intensityPoints, true);
     }
     return outputPath;
 }
@@ -179,10 +122,8 @@ std::string FlsToPly::transToPlyIntensity(const ref_ptr<LSScan> scan, const std:
 std::string FlsToPly::transToPlySpherical(const ref_ptr<LSScan> scan, const std::string outputPath)
 {
     std::cout << "\nReading and saving spherical coordinates..." << std::endl;
-    // 获取球坐标迭代器
     LSSphericalIterator<LSPointSphericalRGB> sphericalIterator = scan->getSphericalCoordinatesIterator();
 
-    // 注意：球坐标点需要转换为笛卡尔坐标保存
     std::vector<LSPointXYZRGB> sphericalPoints;
     sphericalPoints.reserve(1000000);
 
@@ -190,10 +131,9 @@ std::string FlsToPly::transToPlySpherical(const ref_ptr<LSScan> scan, const std:
     while (sphericalIterator.moveNext()) {
         LSPointSphericalRGB sphericalPoint = sphericalIterator.getCurrent();
 
-        // 将球坐标转换为笛卡尔坐标
         double radius = sphericalPoint.radius;
-        double phi = sphericalPoint.phi;     // 方位角
-        double theta = sphericalPoint.theta; // 极角
+        double phi = sphericalPoint.phi;
+        double theta = sphericalPoint.theta;
 
         LSPointXYZRGB cartesianPoint;
         cartesianPoint.x = radius * sin(theta) * cos(phi);
@@ -206,35 +146,28 @@ std::string FlsToPly::transToPlySpherical(const ref_ptr<LSScan> scan, const std:
         sphericalPoints.push_back(cartesianPoint);
         pointCount++;
 
-        if (pointCount % 100000 == 0) {
-            std::cout << "Collected " << pointCount << " spherical points..." << std::endl;
-        }
+        if (pointCount % 1000000 == 0)
+            std::cout << "  " << pointCount << " points..." << std::endl;
     }
 
-    std::cout << "Total spherical points collected: " << pointCount << std::endl;
+    std::cout << "Total spherical points: " << pointCount << std::endl;
 
     if (pointCount > 0) {
-        // std::string plyFilename = outputDir + "\\scan_" + std::to_string(i + 1) + "_spherical.ply";
-        if (savePointCloudToPLY(outputPath, sphericalPoints, false)) {
-            std::cout << "Spherical point cloud saved to: " << outputPath << std::endl;
-        }
+        savePointCloudToPLY(outputPath, sphericalPoints, true);
     }
     return outputPath;
 }
 
 std::string FlsToPly::transToPlyProject(const ref_ptr<LSProject> project, const std::string outputPath)
 {
-    // 创建项目点云 (合并所有扫描)
     LSResult::Result result = project->createPointCloud();
     if (result == LSResult::Ok) {
         std::cout << "\nProject point cloud created successfully." << std::endl;
 
-        // 获取项目点云
         ref_ptr<LSPointCloud> pointCloud = project->getPointCloud();
         if (pointCloud) {
             std::cout << "Reading and saving project point cloud..." << std::endl;
 
-            // 获取点云的迭代器
             LSIterator<LSPointXYZRGB> pcIterator = pointCloud->getPointCloudIterator();
 
             std::vector<LSPointXYZRGB> projectPoints;
@@ -242,234 +175,240 @@ std::string FlsToPly::transToPlyProject(const ref_ptr<LSProject> project, const 
 
             uint64_t pcPointCount = 0;
             while (pcIterator.moveNext()) {
-                LSPointXYZRGB point = pcIterator.getCurrent();
-                projectPoints.push_back(point);
+                projectPoints.push_back(pcIterator.getCurrent());
                 pcPointCount++;
-
-                if (pcPointCount % 100000 == 0) {
-                    std::cout << "Collected " << pcPointCount << " project points..." << std::endl;
-                }
+                if (pcPointCount % 1000000 == 0)
+                    std::cout << "  " << pcPointCount << " points..." << std::endl;
             }
 
-            std::cout << "Total points in project point cloud: " << pcPointCount << std::endl;
+            std::cout << "Total project points: " << pcPointCount << std::endl;
 
             if (pcPointCount > 0) {
-                // std::string plyFilename = outputDir + "\\project_merged_pointcloud.ply";
-                if (savePointCloudToPLY(outputPath, projectPoints, false)) {
-                    std::cout << "Project point cloud saved to: " << outputPath << std::endl;
-                }
-
-                // 可选：保存为二进制格式
-                // std::string plyBinaryFilename = outputDir + "\\project_merged_pointcloud_binary.ply";
-                // savePointCloudToPLY(plyBinaryFilename, projectPoints, true);
+                savePointCloudToPLY(outputPath, projectPoints, true);
             }
         }
     }
     return outputPath;
 }
 
-/**
- * @brief 保存XYZRGB点云到PLY文件
- * @param filename 要保存的文件名
- * @param points 点集
- * @param binary 是否保存为二进制格式
- */
+// ─── PLY 保存函数 ───
+
+static std::string buildPlyHeader(bool binary,
+    const char* extraProp1, const char* extraProp2, const char* extraProp3,
+    size_t vertexCount)
+{
+    std::string hdr;
+    hdr.append("ply\n");
+    hdr.append(binary ? "format binary_little_endian 1.0\n" : "format ascii 1.0\n");
+    hdr.append("element vertex ").append(std::to_string(vertexCount)).append("\n");
+    hdr.append("property float x\n");
+    hdr.append("property float y\n");
+    hdr.append("property float z\n");
+    if (extraProp1) hdr.append(extraProp1);
+    if (extraProp2) hdr.append(extraProp2);
+    if (extraProp3) hdr.append(extraProp3);
+    hdr.append("end_header\n");
+    return hdr;
+}
+
+static void verifyPlyFile(const std::string& filename, size_t vertexCount, size_t bytesPerVertex)
+{
+    std::error_code ec;
+    auto fileSize = std::filesystem::file_size(std::filesystem::path(filename), ec);
+    if (ec) {
+        std::cerr << "Warning: cannot stat output file: " << filename << std::endl;
+        return;
+    }
+    size_t hdrSize = 0;
+    {
+        std::ifstream hfile(filename, std::ios::binary);
+        std::string allHdr;
+        char buf[4096];
+        while (hfile.good()) {
+            hfile.read(buf, sizeof(buf));
+            allHdr.append(buf, static_cast<size_t>(hfile.gcount()));
+            if (allHdr.find("end_header\n") != std::string::npos) break;
+        }
+        hdrSize = allHdr.find("end_header\n");
+        if (hdrSize != std::string::npos) hdrSize += strlen("end_header\n");
+        else hdrSize = 0;
+    }
+    size_t expectedData = vertexCount * bytesPerVertex;
+    size_t expectedTotal = hdrSize + expectedData;
+    std::cout << "File size: " << fileSize << " bytes, expected ~" << expectedTotal
+              << " bytes (header=" << hdrSize << ", data=" << expectedData << ")" << std::endl;
+    if (fileSize < expectedTotal) {
+        std::cerr << "ERROR: File is TRUNCATED by " << (expectedTotal - fileSize) << " bytes!" << std::endl;
+    } else if (fileSize > expectedTotal) {
+        std::cerr << "WARNING: File is larger than expected by " << (fileSize - expectedTotal) << " bytes" << std::endl;
+    }
+}
+
+static BOOL plyWriteAll(HANDLE hFile, const void* data, size_t totalBytes)
+{
+    const size_t CHUNK = 4 * 1024 * 1024;
+    const uint8_t* p = static_cast<const uint8_t*>(data);
+    size_t remaining = totalBytes;
+    while (remaining > 0) {
+        size_t toWrite = std::min(remaining, CHUNK);
+        DWORD w = 0;
+        if (!WriteFile(hFile, p, (DWORD)toWrite, &w, NULL) || w == 0) {
+            std::cerr << "WriteFile FAILED at offset " << (p - static_cast<const uint8_t*>(data))
+                      << " error=" << GetLastError() << std::endl;
+            return FALSE;
+        }
+        p += w;
+        remaining -= w;
+    }
+    return TRUE;
+}
+
 bool FlsToPly::savePointCloudToPLY(const std::string& filename,
     const std::vector<LSPointXYZRGB>& points,
     bool binary) {
-    std::ofstream file;
-    if (binary) {
-        file.open(filename, std::ios::binary);
-    }
-    else {
-        file.open(filename);
-    }
-
-    if (!file.is_open()) {
-        std::cerr << "Failed to open PLY file: " << filename << std::endl;
+    HANDLE hFile = CreateFileA(filename.c_str(), GENERIC_WRITE, 0, NULL,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        std::cerr << "Failed to open PLY file: " << filename << " error=" << GetLastError() << std::endl;
         return false;
     }
 
-    // 写入PLY头部
-    file << "ply\n";
+    std::string hdr = buildPlyHeader(binary, "property uchar red\n", "property uchar green\n", "property uchar blue\n", points.size());
+    DWORD written = 0;
+    WriteFile(hFile, hdr.data(), (DWORD)hdr.size(), &written, NULL);
+
     if (binary) {
-        file << "format binary_little_endian 1.0\n";
-    }
-    else {
-        file << "format ascii 1.0\n";
-    }
-    file << "element vertex " << points.size() << "\n";
-    file << "property float x\n";
-    file << "property float y\n";
-    file << "property float z\n";
-    file << "property uchar red\n";
-    file << "property uchar green\n";
-    file << "property uchar blue\n";
-    file << "end_header\n";
-
-    // 写入点数据
-    if (binary) {
-        for (const auto& point : points) {
-            // 写入坐标（float格式）
-            float x = static_cast<float>(point.x);
-            float y = static_cast<float>(point.y);
-            float z = static_cast<float>(point.z);
-            file.write(reinterpret_cast<const char*>(&x), sizeof(float));
-            file.write(reinterpret_cast<const char*>(&y), sizeof(float));
-            file.write(reinterpret_cast<const char*>(&z), sizeof(float));
-
-            // 写入颜色
-            file.write(reinterpret_cast<const char*>(&point.r), sizeof(uint8_t));
-            file.write(reinterpret_cast<const char*>(&point.g), sizeof(uint8_t));
-            file.write(reinterpret_cast<const char*>(&point.b), sizeof(uint8_t));
+        const size_t VERTEX_SIZE = 15;
+        size_t totalBytes = points.size() * VERTEX_SIZE;
+        std::vector<uint8_t> payload(totalBytes);
+        for (size_t i = 0; i < points.size(); ++i) {
+            size_t off = i * VERTEX_SIZE;
+            float x = static_cast<float>(points[i].x);
+            float y = static_cast<float>(points[i].y);
+            float z = static_cast<float>(points[i].z);
+            std::memcpy(&payload[off], &x, 4);
+            std::memcpy(&payload[off + 4], &y, 4);
+            std::memcpy(&payload[off + 8], &z, 4);
+            payload[off + 12] = points[i].r;
+            payload[off + 13] = points[i].g;
+            payload[off + 14] = points[i].b;
         }
-    }
-    else {
-        // ASCII格式
-        file << std::fixed << std::setprecision(6);
-        for (const auto& point : points) {
-            file << point.x << " " << point.y << " " << point.z << " "
-                << static_cast<int>(point.r) << " "
-                << static_cast<int>(point.g) << " "
-                << static_cast<int>(point.b) << "\n";
+        plyWriteAll(hFile, payload.data(), totalBytes);
+    } else {
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(6);
+        for (const auto& p : points) {
+            oss << p.x << " " << p.y << " " << p.z << " "
+                << static_cast<int>(p.r) << " "
+                << static_cast<int>(p.g) << " "
+                << static_cast<int>(p.b) << "\n";
         }
+        std::string ascii = oss.str();
+        plyWriteAll(hFile, ascii.data(), ascii.size());
     }
 
-    file.close();
-    std::cout << "Saved " << points.size() << " points to PLY file: " << filename << std::endl;
+    FlushFileBuffers(hFile);
+    CloseHandle(hFile);
+    verifyPlyFile(filename, points.size(), 15);
+    std::cout << "Saved " << points.size() << " points to PLY: " << filename << std::endl;
     return true;
 }
 
-/**
- * 保存带法向量的点云到PLY文件
- */
 bool FlsToPly::savePointCloudWithNormalsToPLY(const std::string& filename,
     const std::vector<LSPointXYZN>& points,
     bool binary) {
-    std::ofstream file;
-    if (binary) {
-        file.open(filename, std::ios::binary);
-    }
-    else {
-        file.open(filename);
-    }
-
-    if (!file.is_open()) {
-        std::cerr << "Failed to open PLY file: " << filename << std::endl;
+    HANDLE hFile = CreateFileA(filename.c_str(), GENERIC_WRITE, 0, NULL,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        std::cerr << "Failed to open PLY file: " << filename << " error=" << GetLastError() << std::endl;
         return false;
     }
 
-    // 写入PLY头部
-    file << "ply\n";
+    std::string hdr = buildPlyHeader(binary, "property float nx\n", "property float ny\n", "property float nz\n", points.size());
+    DWORD written = 0;
+    WriteFile(hFile, hdr.data(), (DWORD)hdr.size(), &written, NULL);
+
     if (binary) {
-        file << "format binary_little_endian 1.0\n";
-    }
-    else {
-        file << "format ascii 1.0\n";
-    }
-    file << "element vertex " << points.size() << "\n";
-    file << "property float x\n";
-    file << "property float y\n";
-    file << "property float z\n";
-    file << "property float nx\n";
-    file << "property float ny\n";
-    file << "property float nz\n";
-    file << "end_header\n";
-
-    // 写入点数据
-    if (binary) {
-        for (const auto& point : points) {
-            // 写入坐标（float格式）
-            float x = static_cast<float>(point.x);
-            float y = static_cast<float>(point.y);
-            float z = static_cast<float>(point.z);
-            file.write(reinterpret_cast<const char*>(&x), sizeof(float));
-            file.write(reinterpret_cast<const char*>(&y), sizeof(float));
-            file.write(reinterpret_cast<const char*>(&z), sizeof(float));
-
-            // 写入法向量
-            float nx = point.nX;
-            float ny = point.nY;
-            float nz = point.nZ;
-            file.write(reinterpret_cast<const char*>(&nx), sizeof(float));
-            file.write(reinterpret_cast<const char*>(&ny), sizeof(float));
-            file.write(reinterpret_cast<const char*>(&nz), sizeof(float));
+        const size_t VERTEX_SIZE = 24;
+        size_t totalBytes = points.size() * VERTEX_SIZE;
+        std::vector<uint8_t> payload(totalBytes);
+        for (size_t i = 0; i < points.size(); ++i) {
+            size_t off = i * VERTEX_SIZE;
+            float x = static_cast<float>(points[i].x);
+            float y = static_cast<float>(points[i].y);
+            float z = static_cast<float>(points[i].z);
+            float nx = static_cast<float>(points[i].nX);
+            float ny = static_cast<float>(points[i].nY);
+            float nz = static_cast<float>(points[i].nZ);
+            std::memcpy(&payload[off],      &x,  4);
+            std::memcpy(&payload[off + 4],  &y,  4);
+            std::memcpy(&payload[off + 8],  &z,  4);
+            std::memcpy(&payload[off + 12], &nx, 4);
+            std::memcpy(&payload[off + 16], &ny, 4);
+            std::memcpy(&payload[off + 20], &nz, 4);
         }
-    }
-    else {
-        // ASCII格式
-        file << std::fixed << std::setprecision(6);
-        for (const auto& point : points) {
-            file << point.x << " " << point.y << " " << point.z << " "
-                << point.nX << " " << point.nY << " " << point.nZ << "\n";
+        plyWriteAll(hFile, payload.data(), totalBytes);
+    } else {
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(6);
+        for (const auto& p : points) {
+            oss << p.x << " " << p.y << " " << p.z << " "
+                << p.nX << " " << p.nY << " " << p.nZ << "\n";
         }
+        std::string ascii = oss.str();
+        plyWriteAll(hFile, ascii.data(), ascii.size());
     }
 
-    file.close();
-    std::cout << "Saved " << points.size() << " points with normals to PLY file: " << filename << std::endl;
+    FlushFileBuffers(hFile);
+    CloseHandle(hFile);
+    verifyPlyFile(filename, points.size(), 24);
+    std::cout << "Saved " << points.size() << " points with normals to PLY: " << filename << std::endl;
     return true;
 }
 
-/**
- * 保存带反射强度的点云到PLY文件
- */
 bool FlsToPly::savePointCloudWithIntensityToPLY(const std::string& filename,
     const std::vector<LSPointXYZI>& points,
     bool binary) {
-    std::ofstream file;
-    if (binary) {
-        file.open(filename, std::ios::binary);
-    }
-    else {
-        file.open(filename);
-    }
-
-    if (!file.is_open()) {
-        std::cerr << "Failed to open PLY file: " << filename << std::endl;
+    HANDLE hFile = CreateFileA(filename.c_str(), GENERIC_WRITE, 0, NULL,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        std::cerr << "Failed to open PLY file: " << filename << " error=" << GetLastError() << std::endl;
         return false;
     }
 
-    // 写入PLY头部
-    file << "ply\n";
+    std::string hdr = buildPlyHeader(binary, "property float intensity\n", nullptr, nullptr, points.size());
+    DWORD written = 0;
+    WriteFile(hFile, hdr.data(), (DWORD)hdr.size(), &written, NULL);
+
     if (binary) {
-        file << "format binary_little_endian 1.0\n";
-    }
-    else {
-        file << "format ascii 1.0\n";
-    }
-    file << "element vertex " << points.size() << "\n";
-    file << "property float x\n";
-    file << "property float y\n";
-    file << "property float z\n";
-    file << "property float intensity\n";
-    file << "end_header\n";
-
-    // 写入点数据
-    if (binary) {
-        for (const auto& point : points) {
-            // 写入坐标（float格式）
-            float x = static_cast<float>(point.x);
-            float y = static_cast<float>(point.y);
-            float z = static_cast<float>(point.z);
-            file.write(reinterpret_cast<const char*>(&x), sizeof(float));
-            file.write(reinterpret_cast<const char*>(&y), sizeof(float));
-            file.write(reinterpret_cast<const char*>(&z), sizeof(float));
-
-            // 写入反射强度
-            float intensity = point.i;
-            file.write(reinterpret_cast<const char*>(&intensity), sizeof(float));
+        const size_t VERTEX_SIZE = 16;
+        size_t totalBytes = points.size() * VERTEX_SIZE;
+        std::vector<uint8_t> payload(totalBytes);
+        for (size_t i = 0; i < points.size(); ++i) {
+            size_t off = i * VERTEX_SIZE;
+            float x = static_cast<float>(points[i].x);
+            float y = static_cast<float>(points[i].y);
+            float z = static_cast<float>(points[i].z);
+            float intensity = points[i].i;
+            std::memcpy(&payload[off],      &x,  4);
+            std::memcpy(&payload[off + 4],  &y,  4);
+            std::memcpy(&payload[off + 8],  &z,  4);
+            std::memcpy(&payload[off + 12], &intensity, 4);
         }
-    }
-    else {
-        // ASCII格式
-        file << std::fixed << std::setprecision(6);
-        for (const auto& point : points) {
-            file << point.x << " " << point.y << " " << point.z << " "
-                << point.i << "\n";
+        plyWriteAll(hFile, payload.data(), totalBytes);
+    } else {
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(6);
+        for (const auto& p : points) {
+            oss << p.x << " " << p.y << " " << p.z << " " << p.i << "\n";
         }
+        std::string ascii = oss.str();
+        plyWriteAll(hFile, ascii.data(), ascii.size());
     }
 
-    file.close();
-    std::cout << "Saved " << points.size() << " points with intensity to PLY file: " << filename << std::endl;
+    FlushFileBuffers(hFile);
+    CloseHandle(hFile);
+    verifyPlyFile(filename, points.size(), 16);
+    std::cout << "Saved " << points.size() << " points with intensity to PLY: " << filename << std::endl;
     return true;
 }

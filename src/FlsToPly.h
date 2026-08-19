@@ -4,7 +4,11 @@
 #include <iostream>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <iomanip>
+#define NOMINMAX
+#include <windows.h>
+#include <cstring>
 #include <core_api/lsproject.h>
 #include <core_api/lsscan.h>
 
