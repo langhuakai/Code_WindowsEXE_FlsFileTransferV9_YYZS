@@ -30,26 +30,25 @@
 using namespace SCENE_API;
 namespace fs = std::filesystem;
 
-const wchar_t* API_KEY = L"(YOUR_API_KEY_HERE)";
-const LSString apiKey = LSString::fromCharStr( R"key(
------BEGIN SCENE API KEY-----
-AAIAAMQkN9tn1q/Unp9ozi4TPv+ULNOCU5DBE/Gm6qmwW83gAwyFOwXyU3NXdD12Fbjgq2Nm
-brPJNQugoImH5U7mPfmbMiSAIUwHMGEdwLtB0X6D7eAOfORMp7WfLGbursxzeHPxfutQLm68
-aSxnFev2nO8Nnnwe5xotk4zMgg4Q/hMuZdJa99pdp8Ev9HBJcTFBW+z1AZz71rSH/tNTGots
-/zy3i0xDkh2u+lwFM8mlEyPYo2yqyjSiWZHq2+mYuUOh38lr+Bu2YktDCQ2/H20PB+utjCJ/
-gqpksHNAcrcn+XcsHsU66g0EtpZXUn8lBqpc1zAQ+THuL/162rOYyxCOaEoLBkB6zBW0gMxH
-4pXFfUOrqvtweoYiPmqdESgTiGRbWph56cCgxcBvjSk1yp3JrIBuI31HTowhb7pKMsYX8QNa
-wkmLqkgI/wGkndBCX66eYsoMo/LZD2EUbjxx4NkE8xTon8VKoJJsskIEhyv0FR24ZqKgKyB5
-D4yeBBiU2KEZtLAtp9mGiXVt44C8B6tIZG2iPtPox8UBELaCqargcAKxHqunBI1FGYOfuqlu
-aDanUhCauYndHVJnSn02Ak09qSxWtRASK1MMRINMgcHan2O2k0ZgIcBKJcGb7qgehskTU1Xq
-ScjCY48WhhLpObx35BfTYyg0mn/HKg8rw0lH0L/CewogICJjb250YWN0IjogIlRpYW5xaSBZ
-aSA8amVzc2ljYUBtZXRhZGlnaXRhbC5uZXQuY24+IiwKICAiZmVhdHVyZXMiOiBbInRvcGNv
-bkltcG9ydCIsInByb2Nlc3NTY2FuIiwiY29sb3JpemVTY2FuIiwiVjlpbXBvcnQiXSwKICAi
-bmFtZSI6ICJNZXRhZGlnaXRhbCIsCiAgInV1aWQiOiAiMGI1N2FhNWUtNWE3Ni00OTJkLWE5
-ZmUtMzMzOGQ1ZGQ1YzdkIiwKICAidmVyc2lvbiI6IDIsCiAgImV4cGlyYXRpb24iOiAiMjAy
-OS0wNC0yMFQwMDowMDowMC4wMDBaIgp9
------END SCENE API KEY-----
-)key");
+static std::string getExeDir()
+{
+    char buf[MAX_PATH] = {};
+    GetModuleFileNameA(NULL, buf, MAX_PATH);
+    return fs::path(buf).parent_path().string();
+}
+
+static std::string loadLicenseKey()
+{
+    fs::path licensePath = fs::path(getExeDir()) / "LICENSE.txt";
+    std::ifstream ifs(licensePath, std::ios::binary);
+    if (!ifs.is_open()) {
+        std::cerr << "Error: Cannot open license file: " << licensePath.string() << std::endl;
+        return "";
+    }
+    std::string content((std::istreambuf_iterator<char>(ifs)),
+                         std::istreambuf_iterator<char>());
+    return content;
+}
 
 static std::string getTempProjectDir(const std::string& stem)
 {
@@ -354,8 +353,13 @@ int main(int argc, char* argv[])
 
     // ── Create SCENE API context ──
     std::cout << "\nCreating SCENE API context..." << std::endl;
+    std::string licenseKey = loadLicenseKey();
+    if (licenseKey.empty()) {
+        std::cerr << "Failed to load license key from LICENSE.txt" << std::endl;
+        return 1;
+    }
     LSStandaloneConfig config;
-    config.setLicenseKey(apiKey);
+    config.setLicenseKey(LSString::fromCharStr(licenseKey.c_str()));
     config.setLoggingEnabled(true);
     LSStandaloneContext* context = new LSStandaloneContext(config);
     std::cout << "SCENE API Context created successfully." << std::endl;

@@ -125,6 +125,17 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMENT "复制manifest文件"
 )
 
+# 复制LICENSE.txt到构建目录和部署目录
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE.txt"
+        "${CMAKE_CURRENT_BINARY_DIR}/LICENSE.txt"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE.txt"
+        "${DEPLOY_DIR}/LICENSE.txt"
+    COMMENT "复制LICENSE.txt"
+)
+
 
 
 
