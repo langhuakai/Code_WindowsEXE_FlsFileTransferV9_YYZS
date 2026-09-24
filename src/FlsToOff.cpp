@@ -1,4 +1,5 @@
 #include "FlsToOff.h"
+#include "StringConverter.h"
 #include <iomanip>
 #include <sstream>
 
@@ -27,7 +28,7 @@ bool FlsToOff::savePointCloudToOFF(const std::string& filename,
     HANDLE hFile = CreateFileA(filename.c_str(), GENERIC_WRITE, 0, NULL,
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
-        std::cerr << "Failed to open OFF file: " << filename << " error=" << GetLastError() << std::endl;
+        std::cerr << "Failed to open OFF file: " << StringConverter::ansiToUtf8(filename) << " error=" << GetLastError() << std::endl;
         return false;
     }
 
@@ -46,7 +47,7 @@ bool FlsToOff::savePointCloudToOFF(const std::string& filename,
 
     FlushFileBuffers(hFile);
     CloseHandle(hFile);
-    std::cout << "Saved " << points.size() << " points to OFF: " << filename << std::endl;
+    std::cout << "Saved " << points.size() << " points to OFF: " << StringConverter::ansiToUtf8(filename) << std::endl;
     return true;
 }
 

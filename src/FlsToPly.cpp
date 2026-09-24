@@ -1,5 +1,6 @@
 // FlsToPly.cpp
 #include "FlsToPly.h"
+#include "StringConverter.h"
 
 // 将fls转换为ply点云（优先RGB，回退强度，最后纯坐标）
 std::string FlsToPly::transToPlyRgb(const ref_ptr<LSScan> scan, const std::string outputPath)
@@ -216,7 +217,7 @@ static void verifyPlyFile(const std::string& filename, size_t vertexCount, size_
     std::error_code ec;
     auto fileSize = std::filesystem::file_size(std::filesystem::path(filename), ec);
     if (ec) {
-        std::cerr << "Warning: cannot stat output file: " << filename << std::endl;
+        std::cerr << "Warning: cannot stat output file: " << StringConverter::ansiToUtf8(filename) << std::endl;
         return;
     }
     size_t hdrSize = 0;
@@ -269,7 +270,7 @@ bool FlsToPly::savePointCloudToPLY(const std::string& filename,
     HANDLE hFile = CreateFileA(filename.c_str(), GENERIC_WRITE, 0, NULL,
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
-        std::cerr << "Failed to open PLY file: " << filename << " error=" << GetLastError() << std::endl;
+        std::cerr << "Failed to open PLY file: " << StringConverter::ansiToUtf8(filename) << " error=" << GetLastError() << std::endl;
         return false;
     }
 
@@ -310,7 +311,7 @@ bool FlsToPly::savePointCloudToPLY(const std::string& filename,
     FlushFileBuffers(hFile);
     CloseHandle(hFile);
     verifyPlyFile(filename, points.size(), 15);
-    std::cout << "Saved " << points.size() << " points to PLY: " << filename << std::endl;
+    std::cout << "Saved " << points.size() << " points to PLY: " << StringConverter::ansiToUtf8(filename) << std::endl;
     return true;
 }
 
@@ -320,7 +321,7 @@ bool FlsToPly::savePointCloudWithNormalsToPLY(const std::string& filename,
     HANDLE hFile = CreateFileA(filename.c_str(), GENERIC_WRITE, 0, NULL,
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
-        std::cerr << "Failed to open PLY file: " << filename << " error=" << GetLastError() << std::endl;
+        std::cerr << "Failed to open PLY file: " << StringConverter::ansiToUtf8(filename) << " error=" << GetLastError() << std::endl;
         return false;
     }
 
@@ -362,7 +363,7 @@ bool FlsToPly::savePointCloudWithNormalsToPLY(const std::string& filename,
     FlushFileBuffers(hFile);
     CloseHandle(hFile);
     verifyPlyFile(filename, points.size(), 24);
-    std::cout << "Saved " << points.size() << " points with normals to PLY: " << filename << std::endl;
+    std::cout << "Saved " << points.size() << " points with normals to PLY: " << StringConverter::ansiToUtf8(filename) << std::endl;
     return true;
 }
 
@@ -372,7 +373,7 @@ bool FlsToPly::savePointCloudWithIntensityToPLY(const std::string& filename,
     HANDLE hFile = CreateFileA(filename.c_str(), GENERIC_WRITE, 0, NULL,
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
-        std::cerr << "Failed to open PLY file: " << filename << " error=" << GetLastError() << std::endl;
+        std::cerr << "Failed to open PLY file: " << StringConverter::ansiToUtf8(filename) << " error=" << GetLastError() << std::endl;
         return false;
     }
 
@@ -409,6 +410,6 @@ bool FlsToPly::savePointCloudWithIntensityToPLY(const std::string& filename,
     FlushFileBuffers(hFile);
     CloseHandle(hFile);
     verifyPlyFile(filename, points.size(), 16);
-    std::cout << "Saved " << points.size() << " points with intensity to PLY: " << filename << std::endl;
+    std::cout << "Saved " << points.size() << " points with intensity to PLY: " << StringConverter::ansiToUtf8(filename) << std::endl;
     return true;
 }

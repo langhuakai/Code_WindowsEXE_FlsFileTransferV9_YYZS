@@ -1,4 +1,5 @@
 ﻿#include "FlsToE57.h"
+#include "StringConverter.h"
 #include <core_api/lsstring.h>
 #include <core_api/lsresult.h>
 #include <filesystem>
@@ -17,7 +18,7 @@ std::string FlsToE57::transToE57Scan(const ref_ptr<LSScan> scan, const std::stri
         return "";
     }
 
-    std::cout << "Scan exported to E57: " << outputPath << std::endl;
+    std::cout << "Scan exported to E57: " << StringConverter::ansiToUtf8(outputPath) << std::endl;
     return outputPath;
 }
 
@@ -38,7 +39,7 @@ std::string FlsToE57::transToE57ScanSpatial(const ref_ptr<LSScan> scan, const st
         return "";
     }
 
-    std::cout << "Spatial data exported to E57: " << outputPath << std::endl;
+    std::cout << "Spatial data exported to E57: " << StringConverter::ansiToUtf8(outputPath) << std::endl;
     return outputPath;
 }
 
