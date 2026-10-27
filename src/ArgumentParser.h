@@ -13,6 +13,7 @@ public:
         std::string outputPath;    // 输出文件或目录
         std::string format = "ply"; // 输出格式
         bool outputIsDir = false;  // 输出路径是否为目录
+        bool withImage = false;    // 是否额外输出 png 图片
 
         bool help = false;         // 是否显示帮助
         bool valid = false;        // 参数是否有效

@@ -3,6 +3,7 @@
 #include "StringConverter.h"
 #include "FlsToPly.h"
 #include "FlsToOff.h"
+#include "FlsToImage.h"
 
 #include <iostream>
 #include <filesystem>
@@ -150,7 +151,14 @@ static uint64_t estimatePointCount(const ref_ptr<LSScan> scan)
     return 0;
 }
 
-static void exportScan(const ref_ptr<LSScan> scan, const std::string& outputPath, const std::string& format)
+static bool isImageFormat(const std::string& format)
+{
+    return format == "bmp" || format == "jpg" || format == "png" || format == "tif";
+}
+
+static void exportScan(const ref_ptr<LSScan> scan, const std::string& outputPath,
+                       const std::string& format, bool withImage,
+                       std::string* imagePath = nullptr)
 {
     const FormatEntry* entry = lookupFormat(format);
     if (!entry) {
@@ -160,29 +168,35 @@ static void exportScan(const ref_ptr<LSScan> scan, const std::string& outputPath
 
     if (format == "ply") {
         FlsToPly::transToPlyRgb(scan, outputPath);
-        return;
     }
-
-    if (format == "off") {
+    else if (format == "off") {
         FlsToOff::transToOff(scan, outputPath);
-        return;
+    }
+    else {
+        // Show estimated point count from scan metadata (zero-cost)
+        uint64_t estimated = estimatePointCount(scan);
+        if (estimated > 0) {
+            std::cout << "Exporting ~" << estimated << " points to " << format << " format..." << std::endl;
+        } else {
+            std::cout << "Exporting to " << format << " format..." << std::endl;
+        }
+
+        LSResult::Result result = scan->exportData(
+            LSString::fromCharStr(outputPath.c_str()), entry->exportFmt);
+        if (result != LSResult::Ok) {
+            std::cerr << "Failed to export to " << format
+                      << ". Error code: " << result << std::endl;
+        } else {
+            std::cout << "Export completed: " << StringConverter::ansiToUtf8(outputPath) << std::endl;
+        }
     }
 
-    // Show estimated point count from scan metadata (zero-cost)
-    uint64_t estimated = estimatePointCount(scan);
-    if (estimated > 0) {
-        std::cout << "Exporting ~" << estimated << " points to " << format << " format..." << std::endl;
-    } else {
-        std::cout << "Exporting to " << format << " format..." << std::endl;
-    }
-
-    LSResult::Result result = scan->exportData(
-        LSString::fromCharStr(outputPath.c_str()), entry->exportFmt);
-    if (result != LSResult::Ok) {
-        std::cerr << "Failed to export to " << format
-                  << ". Error code: " << result << std::endl;
-    } else {
-        std::cout << "Export completed: " << StringConverter::ansiToUtf8(outputPath) << std::endl;
+    // 点云导出完成后额外输出一张同名 png 图片; 主输出本身就是图像时跳过
+    if (withImage && !isImageFormat(format)) {
+        std::string written = FlsToImage::exportPng(scan, outputPath);
+        if (imagePath) {
+            *imagePath = written;
+        }
     }
 }
 
@@ -190,7 +204,8 @@ static void exportScan(const ref_ptr<LSScan> scan, const std::string& outputPath
 // Process a single FLS file → output file
 // ──────────────────────────────────────────────
 static bool processFile(const std::string& inputFile, const std::string& outputFile,
-                        const std::string& format, LSStandaloneContext* context)
+                        const std::string& format, bool withImage,
+                        LSStandaloneContext* context)
 {
     std::cout << "\n========================================\n";
     std::cout << "Processing: " << StringConverter::ansiToUtf8(inputFile) << std::endl;
@@ -280,7 +295,7 @@ static bool processFile(const std::string& inputFile, const std::string& outputF
             ? outBase + "_" + std::to_string(i + 1) + ext
             : outputFile;
 
-        exportScan(scan, scanOut, format);
+        exportScan(scan, scanOut, format, withImage);
         scan->unloadData();
     }
 
@@ -475,6 +490,9 @@ int main(int argc, char* argv[])
 
     const FormatEntry* fmtEntry = lookupFormat(options.format);
     const char* ext = fmtEntry ? fmtEntry->ext : ".ply";
+    if (options.withImage) {
+        std::cout << "Image output enabled: an extra .png will be written next to the point cloud." << std::endl;
+    }
     int successCount = 0;
     std::vector<std::string> convertedFiles;
 
@@ -501,7 +519,7 @@ int main(int argc, char* argv[])
         }
 
         std::string absOutput = fs::absolute(outputPath).string();
-        if (processFile(absInput, absOutput, options.format, context))
+        if (processFile(absInput, absOutput, options.format, options.withImage, context))
         {
             ++successCount;
             convertedFiles.push_back(absOutput);
