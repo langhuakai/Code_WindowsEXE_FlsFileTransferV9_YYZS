@@ -100,10 +100,20 @@ ArgumentParser::Options ArgumentParser::parse(int argc, char* argv[])
         {
             options.help = true;
         }
+        else if (arg == "-w" || arg == "--with-image")
+        {
+            options.withImage = true;
+        }
         else
         {
             std::cerr << "错误: 存在未知参数: " << arg << std::endl;
         }
+    }
+
+    // 请求帮助时直接返回, 不再走必填校验, 避免打印无关的错误提示
+    if (options.help)
+    {
+        return options;
     }
 
     if (options.inputFile.empty())
@@ -145,10 +155,13 @@ void ArgumentParser::showHelp(const char* programName)
     std::cout << "       支持的格式:" << std::endl;
     std::cout << "        点云: dxf e57 fls igs las off ply pod pts ptx wrl xyb xyz cpe" << std::endl;
     std::cout << "        图像: bmp jpg png tif" << std::endl;
+    std::cout << "  -w, --with-image    额外输出一张同名 png 图片" << std::endl;
+    std::cout << "                       (点云仍按 -f 指定格式输出)" << std::endl;
     std::cout << "  -h, --help          显示帮助信息" << std::endl;
     std::cout << std::endl;
     std::cout << "示例:" << std::endl;
     std::cout << "  单文件模式: " << programName << " -i scan.fls -o output.e57" << std::endl;
     std::cout << "  目录批处理: " << programName << " -i ./scans/ -o ./output/ -f e57" << std::endl;
+    std::cout << "  同时出图:   " << programName << " -i scan.fls -o output.ply -f ply --with-image" << std::endl;
     std::cout << std::endl;
 }

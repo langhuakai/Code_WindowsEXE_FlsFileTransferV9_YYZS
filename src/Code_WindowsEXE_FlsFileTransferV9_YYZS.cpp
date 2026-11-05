@@ -3,6 +3,7 @@
 #include "StringConverter.h"
 #include "FlsToPly.h"
 #include "FlsToOff.h"
+#include "FlsToImage.h"
 
 #include <iostream>
 #include <filesystem>
@@ -106,7 +107,7 @@ static bool removeDirectory(const LSString& path)
             std::error_code ec;
             fs::remove_all(path.toWcharStr(), ec);
             if (ec) {
-                std::cerr << "Warning: could not remove " << path.toCharStr() << ": " << ec.message() << std::endl;
+                std::cerr << "Warning: could not remove " << StringConverter::ansiToUtf8(path.toCharStr()) << ": " << ec.message() << std::endl;
                 return false;
             }
 #ifdef _WIN32
@@ -149,7 +150,14 @@ static uint64_t estimatePointCount(const ref_ptr<LSScan> scan)
     return 0;
 }
 
-static void exportScan(const ref_ptr<LSScan> scan, const std::string& outputPath, const std::string& format)
+static bool isImageFormat(const std::string& format)
+{
+    return format == "bmp" || format == "jpg" || format == "png" || format == "tif";
+}
+
+static void exportScan(const ref_ptr<LSScan> scan, const std::string& outputPath,
+                       const std::string& format, bool withImage,
+                       std::string* imagePath = nullptr)
 {
     const FormatEntry* entry = lookupFormat(format);
     if (!entry) {
@@ -159,29 +167,35 @@ static void exportScan(const ref_ptr<LSScan> scan, const std::string& outputPath
 
     if (format == "ply") {
         FlsToPly::transToPlyRgb(scan, outputPath);
-        return;
     }
-
-    if (format == "off") {
+    else if (format == "off") {
         FlsToOff::transToOff(scan, outputPath);
-        return;
+    }
+    else {
+        // Show estimated point count from scan metadata (zero-cost)
+        uint64_t estimated = estimatePointCount(scan);
+        if (estimated > 0) {
+            std::cout << "Exporting ~" << estimated << " points to " << format << " format..." << std::endl;
+        } else {
+            std::cout << "Exporting to " << format << " format..." << std::endl;
+        }
+
+        LSResult::Result result = scan->exportData(
+            LSString::fromCharStr(outputPath.c_str()), entry->exportFmt);
+        if (result != LSResult::Ok) {
+            std::cerr << "Failed to export to " << format
+                      << ". Error code: " << result << std::endl;
+        } else {
+            std::cout << "Export completed: " << StringConverter::ansiToUtf8(outputPath) << std::endl;
+        }
     }
 
-    // Show estimated point count from scan metadata (zero-cost)
-    uint64_t estimated = estimatePointCount(scan);
-    if (estimated > 0) {
-        std::cout << "Exporting ~" << estimated << " points to " << format << " format..." << std::endl;
-    } else {
-        std::cout << "Exporting to " << format << " format..." << std::endl;
-    }
-
-    LSResult::Result result = scan->exportData(
-        LSString::fromCharStr(outputPath.c_str()), entry->exportFmt);
-    if (result != LSResult::Ok) {
-        std::cerr << "Failed to export to " << format
-                  << ". Error code: " << result << std::endl;
-    } else {
-        std::cout << "Export completed: " << outputPath << std::endl;
+    // 点云导出完成后额外输出一张同名 png 图片; 主输出本身就是图像时跳过
+    if (withImage && !isImageFormat(format)) {
+        std::string written = FlsToImage::exportPng(scan, outputPath);
+        if (imagePath) {
+            *imagePath = written;
+        }
     }
 }
 
@@ -189,11 +203,12 @@ static void exportScan(const ref_ptr<LSScan> scan, const std::string& outputPath
 // Process a single FLS file → output file
 // ──────────────────────────────────────────────
 static bool processFile(const std::string& inputFile, const std::string& outputFile,
-                        const std::string& format, LSStandaloneContext* context)
+                        const std::string& format, bool withImage,
+                        LSStandaloneContext* context)
 {
     std::cout << "\n========================================\n";
-    std::cout << "Processing: " << inputFile << std::endl;
-    std::cout << "Output to:  " << outputFile << std::endl;
+    std::cout << "Processing: " << StringConverter::ansiToUtf8(inputFile) << std::endl;
+    std::cout << "Output to:  " << StringConverter::ansiToUtf8(outputFile) << std::endl;
     std::cout << "========================================" << std::endl;
 
     std::string stem = fs::path(inputFile).stem().string();
@@ -279,7 +294,7 @@ static bool processFile(const std::string& inputFile, const std::string& outputF
             ? outBase + "_" + std::to_string(i + 1) + ext
             : outputFile;
 
-        exportScan(scan, scanOut, format);
+        exportScan(scan, scanOut, format, withImage);
         scan->unloadData();
     }
 
@@ -289,12 +304,100 @@ static bool processFile(const std::string& inputFile, const std::string& outputF
 }
 
 // ──────────────────────────────────────────────
+// Console output helpers: 通过 WriteConsoleW 直接输出 Unicode,
+// 避免控制台代码页 (chcp) 与字体导致的乱码
+// ──────────────────────────────────────────────
+// 注意: 这里刻意不调用 SetConsoleOutputCP(CP_UTF8)。
+// 把控制台代码页切到 65001 在部分 Windows 控制台 (尤其非 TrueType 字体)
+// 会导致中文整段乱码, 而 WriteConsoleW 直接写入 Unicode, 与代码页无关。
+class ConsoleOutputBuf : public std::streambuf
+{
+public:
+    explicit ConsoleOutputBuf(HANDLE consoleHandle)
+        : m_handle(consoleHandle)
+    {
+    }
+
+    ~ConsoleOutputBuf()
+    {
+        flush();
+    }
+
+protected:
+    int_type overflow(int_type ch) override
+    {
+        if (!traits_type::eq_int_type(ch, traits_type::eof()))
+        {
+            m_pending.push_back(static_cast<char>(ch));
+            if (ch == '\n')
+                flush();
+        }
+        return traits_type::not_eof(ch);
+    }
+
+    int sync() override
+    {
+        flush();
+        return 0;
+    }
+
+private:
+    void flush()
+    {
+        if (m_pending.empty())
+            return;
+
+        int wideLen = ::MultiByteToWideChar(
+            CP_UTF8, 0, m_pending.data(), static_cast<int>(m_pending.size()), nullptr, 0);
+        if (wideLen > 0)
+        {
+            std::vector<wchar_t> wideBuf(wideLen);
+            ::MultiByteToWideChar(CP_UTF8, 0,
+                m_pending.data(), static_cast<int>(m_pending.size()),
+                wideBuf.data(), wideLen);
+            DWORD written = 0;
+            if (::WriteConsoleW(m_handle, wideBuf.data(),
+                    static_cast<DWORD>(wideLen), &written, nullptr))
+            {
+                m_pending.clear();
+                return;
+            }
+        }
+
+        // WriteConsoleW 失败时, 退回为原始字节输出, 避免丢内容
+        DWORD written = 0;
+        ::WriteFile(m_handle, m_pending.data(),
+            static_cast<DWORD>(m_pending.size()), &written, nullptr);
+        m_pending.clear();
+    }
+
+    HANDLE m_handle;
+    std::vector<char> m_pending;
+};
+
+// 当 stdout/stderr 指向真实控制台时, 将其替换为 Unicode 输出流
+static void installUnicodeConsoleOutput()
+{
+    const auto wrap = [](DWORD stdHandleId, std::basic_ostream<char>& stream)
+    {
+        HANDLE handle = ::GetStdHandle(stdHandleId);
+        DWORD mode = 0;
+        if (handle != INVALID_HANDLE_VALUE && ::GetConsoleMode(handle, &mode))
+        {
+            stream.rdbuf(new ConsoleOutputBuf(handle));
+        }
+    };
+
+    wrap(STD_OUTPUT_HANDLE, std::cout);
+    wrap(STD_ERROR_HANDLE, std::cerr);
+}
+
+// ──────────────────────────────────────────────
 // Entry point
 // ──────────────────────────────────────────────
 int main(int argc, char* argv[])
 {
-    SetConsoleOutputCP(CP_UTF8);
-    SetConsoleCP(CP_UTF8);
+    installUnicodeConsoleOutput();
 
     ArgumentParser parser;
     auto options = parser.parse(argc, argv);
@@ -324,19 +427,44 @@ int main(int argc, char* argv[])
 
     if (fs::is_directory(inputPath))
     {
-        std::cout << "Scanning directory: " << options.inputFile << std::endl;
-        for (const auto& entry : fs::directory_iterator(inputPath))
+        std::cout << "Scanning directory: " << StringConverter::ansiToUtf8(options.inputFile) << std::endl;
+
+        // 输入本身就是一个以 .fls 结尾的文件夹时, 直接当成单个 fls 文件处理
+        std::string inputLower = inputPath.filename().string();
+        std::transform(inputLower.begin(), inputLower.end(), inputLower.begin(), ::tolower);
+        bool inputIsFlsFolder = inputLower.ends_with(".fls");
+        if (inputIsFlsFolder)
         {
-            std::string ext = entry.path().extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-            if (ext == ".fls" || ext == ".scn")
+            inputFiles.push_back(inputPath.string());
+        }
+        else
+        {
+            for (const auto& entry : fs::directory_iterator(inputPath))
             {
-                inputFiles.push_back(entry.path().string());
+                if (entry.is_directory())
+                {
+                    // 以 .fls 结尾的文件夹, 当成单个 fls 文件处理
+                    std::string name = entry.path().filename().string();
+                    std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+                    if (name.ends_with(".fls"))
+                    {
+                        inputFiles.push_back(entry.path().string());
+                    }
+                }
+                else
+                {
+                    std::string ext = entry.path().extension().string();
+                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                    if (ext == ".fls" || ext == ".scn")
+                    {
+                        inputFiles.push_back(entry.path().string());
+                    }
+                }
             }
         }
         if (inputFiles.empty())
         {
-            std::cerr << "No FLS/SCN files found in directory: " << options.inputFile << std::endl;
+            std::cerr << "No FLS/SCN files found in directory: " << StringConverter::ansiToUtf8(options.inputFile) << std::endl;
             return 1;
         }
         std::cout << "Found " << inputFiles.size() << " file(s) to process." << std::endl;
@@ -347,7 +475,7 @@ int main(int argc, char* argv[])
     }
     else
     {
-        std::cerr << "Input path does not exist: " << options.inputFile << std::endl;
+        std::cerr << "Input path does not exist: " << StringConverter::ansiToUtf8(options.inputFile) << std::endl;
         return 1;
     }
 
@@ -366,6 +494,9 @@ int main(int argc, char* argv[])
 
     const FormatEntry* fmtEntry = lookupFormat(options.format);
     const char* ext = fmtEntry ? fmtEntry->ext : ".ply";
+    if (options.withImage) {
+        std::cout << "Image output enabled: an extra .png will be written next to the point cloud." << std::endl;
+    }
     int successCount = 0;
     std::vector<std::string> convertedFiles;
 
@@ -392,7 +523,7 @@ int main(int argc, char* argv[])
         }
 
         std::string absOutput = fs::absolute(outputPath).string();
-        if (processFile(absInput, absOutput, options.format, context))
+        if (processFile(absInput, absOutput, options.format, options.withImage, context))
         {
             ++successCount;
             convertedFiles.push_back(absOutput);
@@ -409,7 +540,7 @@ int main(int argc, char* argv[])
         std::cout << "\nConverted files:" << std::endl;
         for (const auto& f : convertedFiles)
         {
-            std::cout << "  " << f << std::endl;
+            std::cout << "  " << StringConverter::ansiToUtf8(f) << std::endl;
         }
     }
 

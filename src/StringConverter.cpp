@@ -51,7 +51,23 @@ std::wstring StringConverter::toWstring(const std::string& str)
     return wstr;
 }
 
-// 4. string ×ª wchar_t* (ÖÇÄÜÖ¸Õë)
+// system ANSI (ACP) to UTF-8
+std::string StringConverter::ansiToUtf8(const std::string& str)
+{
+    if (str.empty()) return "";
+
+    int len = MultiByteToWideChar(CP_ACP, 0, str.c_str(), (int)str.size(),
+        NULL, 0);
+    if (len == 0) return str;
+
+    std::wstring wstr(len, 0);
+    MultiByteToWideChar(CP_ACP, 0, str.c_str(), (int)str.size(),
+        &wstr[0], len);
+
+    return toString(wstr);
+}
+
+// 4. string ×ª wchar_t* (ï¿½ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½)
 std::unique_ptr<wchar_t[]> StringConverter::toWcharPtr(const std::string& str)
 {
     if (str.empty())
@@ -70,7 +86,7 @@ std::unique_ptr<wchar_t[]> StringConverter::toWcharPtr(const std::string& str)
     return wstr;
 }
 
-// 5. wstring ×ª char* (ÖÇÄÜÖ¸Õë)
+// 5. wstring ×ª char* (ï¿½ï¿½ï¿½ï¿½Ö¸ï¿½ï¿½)
 std::unique_ptr<char[]> StringConverter::toCharPtr(const std::wstring& wstr)
 {
     if (wstr.empty())
