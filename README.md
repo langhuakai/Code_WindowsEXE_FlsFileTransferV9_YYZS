@@ -11,3 +11,10 @@ C:\Users\Administrator\Desktop>Code_WindowsEXE_FlsFileTransferV9_YYZS.exe -i C:\
 Code_WindowsEXE_FlsFileTransferV9_YYZS.exe：编译后产生的exe程序
 -i：后面跟要转换的fls文件路径
 -o：后面跟转换后输出的文件路径
+
+# 支持e57点云输入使用实例
+C:\Users\Administrator\Desktop>Code_WindowsEXE_FlsFileTransferV9_YYZS.exe -i D:\\data\\scan.e57 -o E:\\temp\\output\\test.ply -f ply
+说明
+-i：后面跟要转换的输入文件路径，支持 fls / scn / e57（以 .fls 结尾的文件夹当成单个 fls 文件处理）
+-o：后面跟转换后输出的文件路径；给目录时为批处理模式，配合 -f 指定输出格式
+-f：输出格式，默认 ply。e57 转 ply 就是 -i xxx.e57 -o xxx.ply -f ply

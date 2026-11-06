@@ -98,6 +98,28 @@ static const FormatEntry* lookupFormat(const std::string& name)
 }
 
 // ──────────────────────────────────────────────
+// Supported input formats
+// ──────────────────────────────────────────────
+static std::string toLower(const std::string& s)
+{
+    std::string lower = s;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    return lower;
+}
+
+static bool isSupportedInputFile(const fs::path& path)
+{
+    return std::find(INPUT_EXTENSIONS.begin(), INPUT_EXTENSIONS.end(),
+                     toLower(path.extension().string())) != INPUT_EXTENSIONS.end();
+}
+
+// 以 .fls 结尾的文件夹是 FARO 扫描仪工程目录, 当成单个 fls 文件处理
+static bool isFlsProjectFolder(const fs::path& path)
+{
+    return toLower(path.filename().string()).ends_with(".fls");
+}
+
+// ──────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────
 static bool removeDirectory(const LSString& path)
@@ -200,7 +222,7 @@ static void exportScan(const ref_ptr<LSScan> scan, const std::string& outputPath
 }
 
 // ──────────────────────────────────────────────
-// Process a single FLS file → output file
+// Process a single input scan file → output file
 // ──────────────────────────────────────────────
 static bool processFile(const std::string& inputFile, const std::string& outputFile,
                         const std::string& format, bool withImage,
@@ -235,14 +257,14 @@ static bool processFile(const std::string& inputFile, const std::string& outputF
 
     bool importSuccess = project->importData(LSString::fromCharStr(inputFile.c_str()));
     if (!importSuccess) {
-        std::cerr << "Failed to import FLS file." << std::endl;
+        std::cerr << "Failed to import input file: " << StringConverter::ansiToUtf8(inputFile) << std::endl;
         project.reset();
         removeDirectory(tempProjectPath);
         return false;
     }
-    std::cout << "FLS file imported successfully." << std::endl;
+    std::cout << "Input file imported successfully." << std::endl;
 
-    result = project->saveRevision(L"Imported FLS", L"API");
+    result = project->saveRevision(L"Imported scan", L"API");
     if (result != LSResult::Ok) {
         std::cerr << "Warning: Failed to save project revision. Error code: " << result << std::endl;
     } else {
@@ -429,11 +451,8 @@ int main(int argc, char* argv[])
     {
         std::cout << "Scanning directory: " << StringConverter::ansiToUtf8(options.inputFile) << std::endl;
 
-        // 输入本身就是一个以 .fls 结尾的文件夹时, 直接当成单个 fls 文件处理
-        std::string inputLower = inputPath.filename().string();
-        std::transform(inputLower.begin(), inputLower.end(), inputLower.begin(), ::tolower);
-        bool inputIsFlsFolder = inputLower.ends_with(".fls");
-        if (inputIsFlsFolder)
+        // 输入本身就是一个 fls 工程文件夹时, 直接当成单个 fls 文件处理
+        if (isFlsProjectFolder(inputPath))
         {
             inputFiles.push_back(inputPath.string());
         }
@@ -443,34 +462,35 @@ int main(int argc, char* argv[])
             {
                 if (entry.is_directory())
                 {
-                    // 以 .fls 结尾的文件夹, 当成单个 fls 文件处理
-                    std::string name = entry.path().filename().string();
-                    std::transform(name.begin(), name.end(), name.begin(), ::tolower);
-                    if (name.ends_with(".fls"))
+                    // fls 工程文件夹当成单个 fls 文件处理
+                    if (isFlsProjectFolder(entry.path()))
                     {
                         inputFiles.push_back(entry.path().string());
                     }
                 }
-                else
+                else if (isSupportedInputFile(entry.path()))
                 {
-                    std::string ext = entry.path().extension().string();
-                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                    if (ext == ".fls" || ext == ".scn")
-                    {
-                        inputFiles.push_back(entry.path().string());
-                    }
+                    inputFiles.push_back(entry.path().string());
                 }
             }
         }
         if (inputFiles.empty())
         {
-            std::cerr << "No FLS/SCN files found in directory: " << StringConverter::ansiToUtf8(options.inputFile) << std::endl;
+            std::cerr << "No supported input file found in directory: "
+                      << StringConverter::ansiToUtf8(options.inputFile) << std::endl;
+            std::cerr << "Supported input formats: " << supportedInputFormatsText() << std::endl;
             return 1;
         }
         std::cout << "Found " << inputFiles.size() << " file(s) to process." << std::endl;
     }
     else if (fs::exists(inputPath))
     {
+        if (!isSupportedInputFile(inputPath))
+        {
+            std::cerr << "Unsupported input format: " << StringConverter::ansiToUtf8(options.inputFile) << std::endl;
+            std::cerr << "Supported input formats: " << supportedInputFormatsText() << std::endl;
+            return 1;
+        }
         inputFiles.push_back(options.inputFile);
     }
     else

@@ -2,6 +2,22 @@
 #pragma once
 
 #include <string>
+#include <vector>
+
+// 支持的输入点云扩展名 (小写, 含点); 以 .fls 结尾的文件夹当成单个 fls 文件处理
+inline const std::vector<std::string> INPUT_EXTENSIONS = { ".fls", ".scn", ".e57" };
+
+// 由 INPUT_EXTENSIONS 生成 "fls, scn, e57" 形式的提示文本
+inline std::string supportedInputFormatsText()
+{
+    std::string text;
+    for (size_t i = 0; i < INPUT_EXTENSIONS.size(); ++i) {
+        if (i > 0)
+            text += ", ";
+        text += INPUT_EXTENSIONS[i].substr(1);
+    }
+    return text;
+}
 
 class ArgumentParser
 {

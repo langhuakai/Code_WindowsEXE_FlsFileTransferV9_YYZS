@@ -147,7 +147,8 @@ void ArgumentParser::showHelp(const char* programName)
     std::cout << "用法: " << programName << " [选项]" << std::endl;
     std::cout << std::endl;
     std::cout << "选项:" << std::endl;
-    std::cout << "  -i, --input <路径>   输入 FLS/SCN 文件或目录" << std::endl;
+    std::cout << "  -i, --input <路径>   输入 " << supportedInputFormatsText() << " 文件或目录" << std::endl;
+    std::cout << "                       (fls 工程文件夹当成单个 fls 文件处理)" << std::endl;
     std::cout << "  -o, --output <路径>  输出文件或目录" << std::endl;
     std::cout << "                       (指定扩展名时为单文件模式," << std::endl;
     std::cout << "                        否则为目录批处理模式)" << std::endl;
@@ -161,6 +162,7 @@ void ArgumentParser::showHelp(const char* programName)
     std::cout << std::endl;
     std::cout << "示例:" << std::endl;
     std::cout << "  单文件模式: " << programName << " -i scan.fls -o output.e57" << std::endl;
+    std::cout << "  点云转换:   " << programName << " -i scan.e57 -o output.ply -f ply" << std::endl;
     std::cout << "  目录批处理: " << programName << " -i ./scans/ -o ./output/ -f e57" << std::endl;
     std::cout << "  同时出图:   " << programName << " -i scan.fls -o output.ply -f ply --with-image" << std::endl;
     std::cout << std::endl;
