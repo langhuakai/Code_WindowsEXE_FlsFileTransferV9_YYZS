@@ -56,7 +56,13 @@ std::string FlsToE57::transToE57Project(const ref_ptr<LSProject> project, const 
         ref_ptr<LSScan> scan = scans.get()[i];
         std::cout << "\n--- Exporting Scan " << (i + 1) << " to E57 ---" << std::endl;
 
-        LSResult::Result result = scan->loadData(LSScan::AUTO);
+        // 颜色与反射强度同时加载, 否则 E57 会丢掉反射强度
+        scan->unloadData();
+        LSResult::Result result = scan->loadData(LSScan::COLOR_AND_REFLECTION);
+        if (result != LSResult::Ok) {
+            scan->unloadData();
+            result = scan->loadData(LSScan::AUTO);
+        }
         if (result != LSResult::Ok) {
             std::cerr << "Failed to load scan data. Error code: " << result << std::endl;
             continue;

@@ -1,10 +1,95 @@
 // FlsToPly.cpp
 #include "FlsToPly.h"
 #include "StringConverter.h"
+#include <cmath>
 
-// 将fls转换为ply点云（优先RGB，回退强度，最后纯坐标）
-std::string FlsToPly::transToPlyRgb(const ref_ptr<LSScan> scan, const std::string outputPath)
+// 失败原因既打印到 stderr, 也回传给上层汇总
+static bool plyFail(std::string* failReason, const std::string& msg)
 {
+    if (failReason) *failReason = msg;
+    std::cerr << msg << std::endl;
+    return false;
+}
+
+// 颜色与反射强度分两趟读取后合并写出。
+// 两种数据同时加载时 getScanReflectionIterator() 返回的强度是无效值, 只能分开加载。
+static bool exportRgbWithIntensity(const ref_ptr<LSScan>& scan, const std::string& outputPath,
+    std::string* failReason)
+{
+    struct CoordSample { uint64_t index; float x, y, z; };
+
+    scan->unloadData();
+    bool ok = scan->loadData(LSScan::REFLECTION) == LSResult::Ok;
+
+    std::vector<float> intensities;
+    std::vector<CoordSample> samples;
+    if (ok) {
+        intensities.reserve(1000000);
+        LSScanIterator<LSPointXYZI> it = scan->getScanReflectionIterator();
+        uint64_t count = 0;
+        while (it.moveNext()) {
+            LSPointXYZI p = it.getCurrent();
+            intensities.push_back(p.i);
+            if (count % 1024 == 0)
+                samples.push_back({ count, static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z) });
+            ++count;
+        }
+        std::cout << "Total: " << intensities.size() << " intensity values." << std::endl;
+        ok = !intensities.empty();
+        if (!ok) plyFail(failReason, "No intensity values to export.");
+    }
+
+    std::vector<LSPointXYZRGB> points;
+    if (ok) {
+        scan->unloadData();
+        ok = scan->loadData(LSScan::COLOR) == LSResult::Ok;
+    }
+    if (ok) {
+        points.reserve(intensities.size());
+        LSScanIterator<LSPointXYZRGB> it = scan->getScanIterator();
+        uint64_t count = 0;
+        size_t sampleIdx = 0;
+        while (it.moveNext()) {
+            LSPointXYZRGB p = it.getCurrent();
+            points.push_back(p);
+            if (sampleIdx < samples.size() && samples[sampleIdx].index == count) {
+                const CoordSample& s = samples[sampleIdx];
+                double d = std::fabs(p.x - s.x) + std::fabs(p.y - s.y) + std::fabs(p.z - s.z);
+                if (d > 1e-3) {
+                    std::cerr << "Warning: color/intensity point order mismatch at index " << count
+                              << ", dropping intensity." << std::endl;
+                    if (failReason) *failReason = "color/intensity point order mismatch";
+                    ok = false;
+                    break;
+                }
+                ++sampleIdx;
+            }
+            ++count;
+        }
+        if (ok && points.size() != intensities.size()) {
+            std::cerr << "Warning: color point count (" << points.size()
+                      << ") != intensity count (" << intensities.size() << "), dropping intensity." << std::endl;
+            if (failReason) *failReason = "color point count != intensity count";
+            ok = false;
+        }
+    }
+
+    if (ok)
+        ok = FlsToPly::savePointCloudWithColorAndIntensityToPLY(outputPath, points, intensities, true, failReason);
+
+    // 结束时保持颜色数据已加载, 供回退分支与图片导出使用
+    if (!scan->dataLoaded(LSScan::COLOR)) {
+        scan->unloadData();
+        scan->loadData(LSScan::COLOR);
+    }
+    return ok;
+}
+
+// 将fls转换为ply点云（优先RGB+强度，回退RGB，再回退强度，最后纯坐标）
+std::string FlsToPly::transToPlyRgb(const ref_ptr<LSScan> scan, const std::string outputPath,
+    std::string* failReason)
+{
+    if (failReason) failReason->clear();
     std::cout << "\nReading point cloud..." << std::endl;
 
     bool hasColor = scan->dataAvailable(LSScan::COLOR);
@@ -12,7 +97,14 @@ std::string FlsToPly::transToPlyRgb(const ref_ptr<LSScan> scan, const std::strin
     std::cout << "Color: " << (hasColor ? "Yes" : "No")
               << ", Reflection: " << (hasReflection ? "Yes" : "No") << std::endl;
 
-    // 优先: 有真实颜色 -> RGB PLY
+    // 优先: 颜色与反射强度都有 -> RGB + intensity PLY
+    if (hasColor && hasReflection) {
+        if (exportRgbWithIntensity(scan, outputPath, failReason))
+            return outputPath;
+        std::cout << "Falling back to RGB-only PLY." << std::endl;
+    }
+
+    // 其次: 有真实颜色 -> RGB PLY
     if (hasColor) {
         std::cout << "Exporting RGB point cloud..." << std::endl;
         LSScanIterator<LSPointXYZRGB> scanIterator = scan->getScanIterator();
@@ -26,8 +118,11 @@ std::string FlsToPly::transToPlyRgb(const ref_ptr<LSScan> scan, const std::strin
                 std::cout << "  " << count << " points..." << std::endl;
         }
         std::cout << "Total: " << count << " RGB points." << std::endl;
-        if (count > 0) savePointCloudToPLY(outputPath, points, true);
-        return outputPath;
+        if (count == 0) {
+            plyFail(failReason, "No points to export.");
+            return std::string();
+        }
+        return savePointCloudToPLY(outputPath, points, true, failReason) ? outputPath : std::string();
     }
 
     // 其次: 有反射强度 -> 强度 PLY
@@ -44,8 +139,11 @@ std::string FlsToPly::transToPlyRgb(const ref_ptr<LSScan> scan, const std::strin
                 std::cout << "  " << count << " points..." << std::endl;
         }
         std::cout << "Total: " << count << " intensity points." << std::endl;
-        if (count > 0) savePointCloudWithIntensityToPLY(outputPath, points, true);
-        return outputPath;
+        if (count == 0) {
+            plyFail(failReason, "No points to export.");
+            return std::string();
+        }
+        return savePointCloudWithIntensityToPLY(outputPath, points, true, failReason) ? outputPath : std::string();
     }
 
     // 最后: 纯坐标 PLY（无颜色无强度）
@@ -59,8 +157,11 @@ std::string FlsToPly::transToPlyRgb(const ref_ptr<LSScan> scan, const std::strin
         count++;
     }
     std::cout << "Total: " << count << " points (no color)." << std::endl;
-    if (count > 0) savePointCloudToPLY(outputPath, points, true);
-    return outputPath;
+    if (count == 0) {
+        plyFail(failReason, "No points to export.");
+        return std::string();
+    }
+    return savePointCloudToPLY(outputPath, points, true, failReason) ? outputPath : std::string();
 }
 
 // 将fls转换为带法向量的点云文件
@@ -82,10 +183,11 @@ std::string FlsToPly::transToPlyNormals(const ref_ptr<LSScan> scan, const std::s
 
     std::cout << "Total points with normals: " << pointCount << std::endl;
 
-    if (pointCount > 0) {
-        savePointCloudWithNormalsToPLY(outputPath, normalPoints, true);
+    if (pointCount == 0) {
+        std::cerr << "No points to export." << std::endl;
+        return std::string();
     }
-    return outputPath;
+    return savePointCloudWithNormalsToPLY(outputPath, normalPoints, true) ? outputPath : std::string();
 }
 
 // 将fls转换为带反射强度的点云文件
@@ -113,10 +215,11 @@ std::string FlsToPly::transToPlyIntensity(const ref_ptr<LSScan> scan, const std:
 
     std::cout << "Total points with reflection: " << pointCount << std::endl;
 
-    if (pointCount > 0) {
-        savePointCloudWithIntensityToPLY(outputPath, intensityPoints, true);
+    if (pointCount == 0) {
+        std::cerr << "No points to export." << std::endl;
+        return std::string();
     }
-    return outputPath;
+    return savePointCloudWithIntensityToPLY(outputPath, intensityPoints, true) ? outputPath : std::string();
 }
 
 // 将fls转换为球坐标文件
@@ -153,10 +256,11 @@ std::string FlsToPly::transToPlySpherical(const ref_ptr<LSScan> scan, const std:
 
     std::cout << "Total spherical points: " << pointCount << std::endl;
 
-    if (pointCount > 0) {
-        savePointCloudToPLY(outputPath, sphericalPoints, true);
+    if (pointCount == 0) {
+        std::cerr << "No points to export." << std::endl;
+        return std::string();
     }
-    return outputPath;
+    return savePointCloudToPLY(outputPath, sphericalPoints, true) ? outputPath : std::string();
 }
 
 std::string FlsToPly::transToPlyProject(const ref_ptr<LSProject> project, const std::string outputPath)
@@ -184,18 +288,20 @@ std::string FlsToPly::transToPlyProject(const ref_ptr<LSProject> project, const 
 
             std::cout << "Total project points: " << pcPointCount << std::endl;
 
-            if (pcPointCount > 0) {
-                savePointCloudToPLY(outputPath, projectPoints, true);
+            if (pcPointCount == 0) {
+                std::cerr << "No points to export." << std::endl;
+                return std::string();
             }
+            return savePointCloudToPLY(outputPath, projectPoints, true) ? outputPath : std::string();
         }
     }
-    return outputPath;
+    return std::string();
 }
 
 // ─── PLY 保存函数 ───
 
 static std::string buildPlyHeader(bool binary,
-    const char* extraProp1, const char* extraProp2, const char* extraProp3,
+    const std::string& extraProps,
     size_t vertexCount)
 {
     std::string hdr;
@@ -205,20 +311,18 @@ static std::string buildPlyHeader(bool binary,
     hdr.append("property float x\n");
     hdr.append("property float y\n");
     hdr.append("property float z\n");
-    if (extraProp1) hdr.append(extraProp1);
-    if (extraProp2) hdr.append(extraProp2);
-    if (extraProp3) hdr.append(extraProp3);
+    hdr.append(extraProps);
     hdr.append("end_header\n");
     return hdr;
 }
 
-static void verifyPlyFile(const std::string& filename, size_t vertexCount, size_t bytesPerVertex)
+static bool verifyPlyFile(const std::string& filename, size_t vertexCount, size_t bytesPerVertex,
+    std::string* failReason)
 {
     std::error_code ec;
     auto fileSize = std::filesystem::file_size(std::filesystem::path(filename), ec);
     if (ec) {
-        std::cerr << "Warning: cannot stat output file: " << StringConverter::ansiToUtf8(filename) << std::endl;
-        return;
+        return plyFail(failReason, "ERROR: cannot stat output file: " + StringConverter::ansiToUtf8(filename));
     }
     size_t hdrSize = 0;
     {
@@ -239,10 +343,11 @@ static void verifyPlyFile(const std::string& filename, size_t vertexCount, size_
     std::cout << "File size: " << fileSize << " bytes, expected ~" << expectedTotal
               << " bytes (header=" << hdrSize << ", data=" << expectedData << ")" << std::endl;
     if (fileSize < expectedTotal) {
-        std::cerr << "ERROR: File is TRUNCATED by " << (expectedTotal - fileSize) << " bytes!" << std::endl;
+        return plyFail(failReason, "ERROR: File is TRUNCATED by " + std::to_string(expectedTotal - fileSize) + " bytes!");
     } else if (fileSize > expectedTotal) {
         std::cerr << "WARNING: File is larger than expected by " << (fileSize - expectedTotal) << " bytes" << std::endl;
     }
+    return true;
 }
 
 static BOOL plyWriteAll(HANDLE hFile, const void* data, size_t totalBytes)
@@ -266,17 +371,19 @@ static BOOL plyWriteAll(HANDLE hFile, const void* data, size_t totalBytes)
 
 bool FlsToPly::savePointCloudToPLY(const std::string& filename,
     const std::vector<LSPointXYZRGB>& points,
-    bool binary) {
+    bool binary,
+    std::string* failReason) {
+    if (failReason) failReason->clear();
     HANDLE hFile = CreateFileA(filename.c_str(), GENERIC_WRITE, 0, NULL,
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
-        std::cerr << "Failed to open PLY file: " << StringConverter::ansiToUtf8(filename) << " error=" << GetLastError() << std::endl;
-        return false;
+        DWORD err = GetLastError();
+        return plyFail(failReason, "Failed to open PLY file: " + StringConverter::ansiToUtf8(filename)
+            + " error=" + std::to_string(err));
     }
 
-    std::string hdr = buildPlyHeader(binary, "property uchar red\n", "property uchar green\n", "property uchar blue\n", points.size());
-    DWORD written = 0;
-    WriteFile(hFile, hdr.data(), (DWORD)hdr.size(), &written, NULL);
+    std::string hdr = buildPlyHeader(binary, "property uchar red\nproperty uchar green\nproperty uchar blue\n", points.size());
+    BOOL ok = plyWriteAll(hFile, hdr.data(), hdr.size());
 
     if (binary) {
         const size_t VERTEX_SIZE = 15;
@@ -294,7 +401,7 @@ bool FlsToPly::savePointCloudToPLY(const std::string& filename,
             payload[off + 13] = points[i].g;
             payload[off + 14] = points[i].b;
         }
-        plyWriteAll(hFile, payload.data(), totalBytes);
+        ok = ok && plyWriteAll(hFile, payload.data(), totalBytes);
     } else {
         std::ostringstream oss;
         oss << std::fixed << std::setprecision(6);
@@ -305,29 +412,35 @@ bool FlsToPly::savePointCloudToPLY(const std::string& filename,
                 << static_cast<int>(p.b) << "\n";
         }
         std::string ascii = oss.str();
-        plyWriteAll(hFile, ascii.data(), ascii.size());
+        ok = ok && plyWriteAll(hFile, ascii.data(), ascii.size());
     }
 
     FlushFileBuffers(hFile);
     CloseHandle(hFile);
-    verifyPlyFile(filename, points.size(), 15);
+    if (!ok) {
+        return plyFail(failReason, "Failed to write PLY: " + StringConverter::ansiToUtf8(filename));
+    }
+    if (!verifyPlyFile(filename, points.size(), 15, failReason))
+        return false;
     std::cout << "Saved " << points.size() << " points to PLY: " << StringConverter::ansiToUtf8(filename) << std::endl;
     return true;
 }
 
 bool FlsToPly::savePointCloudWithNormalsToPLY(const std::string& filename,
     const std::vector<LSPointXYZN>& points,
-    bool binary) {
+    bool binary,
+    std::string* failReason) {
+    if (failReason) failReason->clear();
     HANDLE hFile = CreateFileA(filename.c_str(), GENERIC_WRITE, 0, NULL,
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
-        std::cerr << "Failed to open PLY file: " << StringConverter::ansiToUtf8(filename) << " error=" << GetLastError() << std::endl;
-        return false;
+        DWORD err = GetLastError();
+        return plyFail(failReason, "Failed to open PLY file: " + StringConverter::ansiToUtf8(filename)
+            + " error=" + std::to_string(err));
     }
 
-    std::string hdr = buildPlyHeader(binary, "property float nx\n", "property float ny\n", "property float nz\n", points.size());
-    DWORD written = 0;
-    WriteFile(hFile, hdr.data(), (DWORD)hdr.size(), &written, NULL);
+    std::string hdr = buildPlyHeader(binary, "property float nx\nproperty float ny\nproperty float nz\n", points.size());
+    BOOL ok = plyWriteAll(hFile, hdr.data(), hdr.size());
 
     if (binary) {
         const size_t VERTEX_SIZE = 24;
@@ -348,7 +461,7 @@ bool FlsToPly::savePointCloudWithNormalsToPLY(const std::string& filename,
             std::memcpy(&payload[off + 16], &ny, 4);
             std::memcpy(&payload[off + 20], &nz, 4);
         }
-        plyWriteAll(hFile, payload.data(), totalBytes);
+        ok = ok && plyWriteAll(hFile, payload.data(), totalBytes);
     } else {
         std::ostringstream oss;
         oss << std::fixed << std::setprecision(6);
@@ -357,29 +470,35 @@ bool FlsToPly::savePointCloudWithNormalsToPLY(const std::string& filename,
                 << p.nX << " " << p.nY << " " << p.nZ << "\n";
         }
         std::string ascii = oss.str();
-        plyWriteAll(hFile, ascii.data(), ascii.size());
+        ok = ok && plyWriteAll(hFile, ascii.data(), ascii.size());
     }
 
     FlushFileBuffers(hFile);
     CloseHandle(hFile);
-    verifyPlyFile(filename, points.size(), 24);
+    if (!ok) {
+        return plyFail(failReason, "Failed to write PLY: " + StringConverter::ansiToUtf8(filename));
+    }
+    if (!verifyPlyFile(filename, points.size(), 24, failReason))
+        return false;
     std::cout << "Saved " << points.size() << " points with normals to PLY: " << StringConverter::ansiToUtf8(filename) << std::endl;
     return true;
 }
 
 bool FlsToPly::savePointCloudWithIntensityToPLY(const std::string& filename,
     const std::vector<LSPointXYZI>& points,
-    bool binary) {
+    bool binary,
+    std::string* failReason) {
+    if (failReason) failReason->clear();
     HANDLE hFile = CreateFileA(filename.c_str(), GENERIC_WRITE, 0, NULL,
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
-        std::cerr << "Failed to open PLY file: " << StringConverter::ansiToUtf8(filename) << " error=" << GetLastError() << std::endl;
-        return false;
+        DWORD err = GetLastError();
+        return plyFail(failReason, "Failed to open PLY file: " + StringConverter::ansiToUtf8(filename)
+            + " error=" + std::to_string(err));
     }
 
-    std::string hdr = buildPlyHeader(binary, "property float intensity\n", nullptr, nullptr, points.size());
-    DWORD written = 0;
-    WriteFile(hFile, hdr.data(), (DWORD)hdr.size(), &written, NULL);
+    std::string hdr = buildPlyHeader(binary, "property float intensity\n", points.size());
+    BOOL ok = plyWriteAll(hFile, hdr.data(), hdr.size());
 
     if (binary) {
         const size_t VERTEX_SIZE = 16;
@@ -396,7 +515,7 @@ bool FlsToPly::savePointCloudWithIntensityToPLY(const std::string& filename,
             std::memcpy(&payload[off + 8],  &z,  4);
             std::memcpy(&payload[off + 12], &intensity, 4);
         }
-        plyWriteAll(hFile, payload.data(), totalBytes);
+        ok = ok && plyWriteAll(hFile, payload.data(), totalBytes);
     } else {
         std::ostringstream oss;
         oss << std::fixed << std::setprecision(6);
@@ -404,12 +523,81 @@ bool FlsToPly::savePointCloudWithIntensityToPLY(const std::string& filename,
             oss << p.x << " " << p.y << " " << p.z << " " << p.i << "\n";
         }
         std::string ascii = oss.str();
-        plyWriteAll(hFile, ascii.data(), ascii.size());
+        ok = ok && plyWriteAll(hFile, ascii.data(), ascii.size());
     }
 
     FlushFileBuffers(hFile);
     CloseHandle(hFile);
-    verifyPlyFile(filename, points.size(), 16);
+    if (!ok) {
+        return plyFail(failReason, "Failed to write PLY: " + StringConverter::ansiToUtf8(filename));
+    }
+    if (!verifyPlyFile(filename, points.size(), 16, failReason))
+        return false;
     std::cout << "Saved " << points.size() << " points with intensity to PLY: " << StringConverter::ansiToUtf8(filename) << std::endl;
+    return true;
+}
+
+bool FlsToPly::savePointCloudWithColorAndIntensityToPLY(const std::string& filename,
+    const std::vector<LSPointXYZRGB>& points,
+    const std::vector<float>& intensities,
+    bool binary,
+    std::string* failReason) {
+    if (failReason) failReason->clear();
+    HANDLE hFile = CreateFileA(filename.c_str(), GENERIC_WRITE, 0, NULL,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        DWORD err = GetLastError();
+        return plyFail(failReason, "Failed to open PLY file: " + StringConverter::ansiToUtf8(filename)
+            + " error=" + std::to_string(err));
+    }
+
+    std::string hdr = buildPlyHeader(binary,
+        "property uchar red\nproperty uchar green\nproperty uchar blue\nproperty float intensity\n",
+        points.size());
+    BOOL ok = plyWriteAll(hFile, hdr.data(), hdr.size());
+
+    if (binary) {
+        const size_t VERTEX_SIZE = 19;
+        size_t totalBytes = points.size() * VERTEX_SIZE;
+        std::vector<uint8_t> payload(totalBytes);
+        for (size_t i = 0; i < points.size(); ++i) {
+            size_t off = i * VERTEX_SIZE;
+            float x = static_cast<float>(points[i].x);
+            float y = static_cast<float>(points[i].y);
+            float z = static_cast<float>(points[i].z);
+            std::memcpy(&payload[off], &x, 4);
+            std::memcpy(&payload[off + 4], &y, 4);
+            std::memcpy(&payload[off + 8], &z, 4);
+            payload[off + 12] = points[i].r;
+            payload[off + 13] = points[i].g;
+            payload[off + 14] = points[i].b;
+            float intensity = intensities[i];
+            std::memcpy(&payload[off + 15], &intensity, 4);
+        }
+        ok = ok && plyWriteAll(hFile, payload.data(), totalBytes);
+    } else {
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(6);
+        for (size_t i = 0; i < points.size(); ++i) {
+            const auto& p = points[i];
+            oss << p.x << " " << p.y << " " << p.z << " "
+                << static_cast<int>(p.r) << " "
+                << static_cast<int>(p.g) << " "
+                << static_cast<int>(p.b) << " "
+                << intensities[i] << "\n";
+        }
+        std::string ascii = oss.str();
+        ok = ok && plyWriteAll(hFile, ascii.data(), ascii.size());
+    }
+
+    FlushFileBuffers(hFile);
+    CloseHandle(hFile);
+    if (!ok) {
+        return plyFail(failReason, "Failed to write PLY: " + StringConverter::ansiToUtf8(filename));
+    }
+    if (!verifyPlyFile(filename, points.size(), 19, failReason))
+        return false;
+    std::cout << "Saved " << points.size() << " points with color and intensity to PLY: "
+              << StringConverter::ansiToUtf8(filename) << std::endl;
     return true;
 }

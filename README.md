@@ -18,3 +18,17 @@ C:\Users\Administrator\Desktop>Code_WindowsEXE_FlsFileTransferV9_YYZS.exe -i D:\
 -i：后面跟要转换的输入文件路径，支持 fls / scn / e57（以 .fls 结尾的文件夹当成单个 fls 文件处理）
 -o：后面跟转换后输出的文件路径；给目录时为批处理模式，配合 -f 指定输出格式
 -f：输出格式，默认 ply。e57 转 ply 就是 -i xxx.e57 -o xxx.ply -f ply
+
+# 输出点云带反射强度
+转换时同时加载颜色与反射强度，输出点云在带颜色的同时也带反射强度。各格式实测结果：
+ply：顶点属性 x y z red green blue intensity，intensity 为 0~1 的 float（二进制小端，每点 19 字节）
+e57：点原型含 intensity 与 colorRed/Green/Blue
+las：pointFormat=2，intensity 为 uint16（归一化值乘以 65535），同时带 RGB
+pts：7 列 x y z i r g b，i 为 SDK 原始整数值
+ptx：7 列 x y z i r g b，i 为 0~1
+xyz：9 列 row col x y z r g b i，i 为 0~255
+off：OFF 格式规范没有反射强度通道，仍只写 x y z r g b
+注意
+1、ply 顶点属性比旧版多了 intensity，下游解析程序需按新属性表读取
+2、SCENE 的 e57 导入器不读取 intensity 通道，所以 e57 输入转 ply 时只有颜色、没有反射强度
+3、ply 的颜色与反射强度分两趟读取后合并；若两趟点数或坐标不一致，自动回退为只带颜色的 ply

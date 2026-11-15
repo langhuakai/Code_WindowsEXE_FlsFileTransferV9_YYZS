@@ -14,8 +14,11 @@ using namespace SCENE_API;
 class FlsToOff
 {
 public:
-    static std::string transToOff(const ref_ptr<LSScan> scan, const std::string outputPath);
+    // 成功返回输出路径, 失败返回空串; failReason 非空时回填失败原因
+    static std::string transToOff(const ref_ptr<LSScan> scan, const std::string outputPath,
+        std::string* failReason = nullptr);
 
     static bool savePointCloudToOFF(const std::string& filename,
-        const std::vector<LSPointXYZRGB>& points);
+        const std::vector<LSPointXYZRGB>& points,
+        std::string* failReason = nullptr);
 };

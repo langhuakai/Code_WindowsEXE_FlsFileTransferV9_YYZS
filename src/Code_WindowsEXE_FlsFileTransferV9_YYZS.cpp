@@ -13,6 +13,7 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <utility>
 #include <core_api/lsglobaldefinitions.h>
 #include <core_api/lsproject.h>
 #include <core_api/lsworkspace.h>
@@ -177,21 +178,54 @@ static bool isImageFormat(const std::string& format)
     return format == "bmp" || format == "jpg" || format == "png" || format == "tif";
 }
 
-static void exportScan(const ref_ptr<LSScan> scan, const std::string& outputPath,
+// 汇总里给出可读的错误名, 而不是光一个数字
+static const char* resultName(LSResult::Result r)
+{
+    switch (r) {
+    case LSResult::Ok:                  return "Ok";
+    case LSResult::Internal:            return "Internal";
+    case LSResult::Unauthorized:        return "Unauthorized";
+    case LSResult::InvalidRequest:      return "InvalidRequest";
+    case LSResult::DuplicateName:       return "DuplicateName";
+    case LSResult::IncompatibleVersion: return "IncompatibleVersion";
+    case LSResult::ReadWrite:           return "ReadWrite";
+    case LSResult::Network:             return "Network";
+    case LSResult::Compatibility:       return "Compatibility";
+    }
+    return "Unknown";
+}
+
+// 颜色与反射强度同时加载, 否则导出会丢掉反射强度; 不支持组合加载时回退 AUTO
+static LSResult::Result loadScanDataForExport(const ref_ptr<LSScan>& scan)
+{
+    scan->unloadData();
+    LSResult::Result result = scan->loadData(LSScan::COLOR_AND_REFLECTION);
+    if (result == LSResult::Ok)
+        return result;
+    scan->unloadData();
+    return scan->loadData(LSScan::AUTO);
+}
+
+// 返回主输出是否写成功; 附带的 png 失败只告警, 不影响返回值
+// failReason 非空时回填失败原因, 供最终汇总打印
+static bool exportScan(const ref_ptr<LSScan> scan, const std::string& outputPath,
                        const std::string& format, bool withImage,
-                       std::string* imagePath = nullptr)
+                       std::string* imagePath = nullptr,
+                       std::string* failReason = nullptr)
 {
     const FormatEntry* entry = lookupFormat(format);
     if (!entry) {
         std::cerr << "Unsupported format: " << format << std::endl;
-        return;
+        if (failReason) *failReason = "unsupported format: " + format;
+        return false;
     }
 
+    bool ok = false;
     if (format == "ply") {
-        FlsToPly::transToPlyRgb(scan, outputPath);
+        ok = !FlsToPly::transToPlyRgb(scan, outputPath, failReason).empty();
     }
     else if (format == "off") {
-        FlsToOff::transToOff(scan, outputPath);
+        ok = !FlsToOff::transToOff(scan, outputPath, failReason).empty();
     }
     else {
         // Show estimated point count from scan metadata (zero-cost)
@@ -204,9 +238,11 @@ static void exportScan(const ref_ptr<LSScan> scan, const std::string& outputPath
 
         LSResult::Result result = scan->exportData(
             LSString::fromCharStr(outputPath.c_str()), entry->exportFmt);
-        if (result != LSResult::Ok) {
+        ok = (result == LSResult::Ok);
+        if (!ok) {
             std::cerr << "Failed to export to " << format
                       << ". Error code: " << result << std::endl;
+            if (failReason) *failReason = std::string("exportData failed: ") + resultName(result);
         } else {
             std::cout << "Export completed: " << StringConverter::ansiToUtf8(outputPath) << std::endl;
         }
@@ -219,19 +255,37 @@ static void exportScan(const ref_ptr<LSScan> scan, const std::string& outputPath
             *imagePath = written;
         }
     }
+    return ok;
 }
 
 // ──────────────────────────────────────────────
 // Process a single input scan file → output file
 // ──────────────────────────────────────────────
-static bool processFile(const std::string& inputFile, const std::string& outputFile,
-                        const std::string& format, bool withImage,
-                        LSStandaloneContext* context)
+// 单个输入文件的结果: 是否全部成功、实际写出的文件、失败原因
+struct FileResult {
+    bool ok = false;
+    std::vector<std::string> outputs;
+    std::string failReason;
+};
+
+static FileResult processFile(const std::string& inputFile, const std::string& outputFile,
+                              const std::string& format, bool withImage,
+                              LSStandaloneContext* context)
 {
+    FileResult res;
+
     std::cout << "\n========================================\n";
     std::cout << "Processing: " << StringConverter::ansiToUtf8(inputFile) << std::endl;
     std::cout << "Output to:  " << StringConverter::ansiToUtf8(outputFile) << std::endl;
     std::cout << "========================================" << std::endl;
+
+    // 输出目录可能尚不存在, 先建好再导入; 否则写点云时 CreateFileA 会报 error=3 (路径不存在)
+    if (!ensureParentDir(LSString::fromCharStr(outputFile.c_str()))) {
+        std::cerr << "Failed to create output directory for: "
+                  << StringConverter::ansiToUtf8(outputFile) << std::endl;
+        res.failReason = "cannot create output directory: " + outputFile;
+        return res;
+    }
 
     std::string stem = fs::path(inputFile).stem().string();
     std::string tempDir = getTempProjectDir(stem);
@@ -244,14 +298,16 @@ static bool processFile(const std::string& inputFile, const std::string& outputF
     LSResult::Result result = LSProject::createProject(tempProjectPath, projectName);
     if (result != LSResult::Ok) {
         std::cerr << "Failed to create project. Error code: " << result << std::endl;
-        return false;
+        res.failReason = std::string("createProject failed: ") + resultName(result);
+        return res;
     }
 
     ref_ptr<LSProject> project;
     result = LSProject::loadProject(tempProjectPath, project, false);
     if (result != LSResult::Ok) {
         std::cerr << "Failed to load project. Error code: " << result << std::endl;
-        return false;
+        res.failReason = std::string("loadProject failed: ") + resultName(result);
+        return res;
     }
     context->setCurrentWorkspace(project);
 
@@ -260,7 +316,8 @@ static bool processFile(const std::string& inputFile, const std::string& outputF
         std::cerr << "Failed to import input file: " << StringConverter::ansiToUtf8(inputFile) << std::endl;
         project.reset();
         removeDirectory(tempProjectPath);
-        return false;
+        res.failReason = "importData failed (unsupported or damaged input)";
+        return res;
     }
     std::cout << "Input file imported successfully." << std::endl;
 
@@ -276,7 +333,8 @@ static bool processFile(const std::string& inputFile, const std::string& outputF
         std::cerr << "No scans found in project." << std::endl;
         project.reset();
         removeDirectory(tempProjectPath);
-        return false;
+        res.failReason = "no scans found after import";
+        return res;
     }
     std::cout << "Found " << scans.get().size() << " scan(s)." << std::endl;
 
@@ -289,9 +347,13 @@ static bool processFile(const std::string& inputFile, const std::string& outputF
         outBase = outputFile.substr(0, outputFile.size() - fs::path(outputFile).extension().string().size());
     }
 
+    bool allOk = true;
     for (size_t i = 0; i < scans.get().size(); ++i) {
         ref_ptr<LSScan> scan = scans.get()[i];
         std::cout << "\n--- Scan " << (i + 1) << " ---" << std::endl;
+
+        // 多扫描时给原因加上序号, 单扫描不加噪音
+        std::string tag = multiScan ? ("scan " + std::to_string(i + 1) + ": ") : "";
 
         // 尝试着色处理（需要项目已保存）
         LSResult::Result procResult = processScan(*scan, true);
@@ -304,11 +366,13 @@ static bool processFile(const std::string& inputFile, const std::string& outputF
             std::cout << "colorizeScan: " << cr << std::endl;
         }
 
-        // 卸载后重新加载，获取处理后的数据
-        scan->unloadData();
-        result = scan->loadData(LSScan::AUTO);
+        // 卸载后重新加载，获取处理后的数据（颜色 + 反射强度）
+        result = loadScanDataForExport(scan);
         if (result != LSResult::Ok) {
             std::cerr << "Failed to load scan data. Error code: " << result << std::endl;
+            if (!res.failReason.empty()) res.failReason += "; ";
+            res.failReason += tag + "loadData failed: " + resultName(result);
+            allOk = false;
             continue;
         }
 
@@ -316,13 +380,24 @@ static bool processFile(const std::string& inputFile, const std::string& outputF
             ? outBase + "_" + std::to_string(i + 1) + ext
             : outputFile;
 
-        exportScan(scan, scanOut, format, withImage);
+        std::string why;
+        if (exportScan(scan, scanOut, format, withImage, nullptr, &why)) {
+            res.outputs.push_back(scanOut);
+        } else {
+            std::cerr << "Failed to export scan " << (i + 1) << " to: "
+                      << StringConverter::ansiToUtf8(scanOut) << std::endl;
+            if (!res.failReason.empty()) res.failReason += "; ";
+            res.failReason += tag + "export to " + format + " failed: "
+                            + (why.empty() ? std::string("unknown error") : why);
+            allOk = false;
+        }
         scan->unloadData();
     }
 
     project.reset();
     removeDirectory(tempProjectPath);
-    return true;
+    res.ok = allOk;
+    return res;
 }
 
 // ──────────────────────────────────────────────
@@ -518,7 +593,8 @@ int main(int argc, char* argv[])
         std::cout << "Image output enabled: an extra .png will be written next to the point cloud." << std::endl;
     }
     int successCount = 0;
-    std::vector<std::string> convertedFiles;
+    std::vector<std::pair<std::string, FileResult>> succeededFiles;
+    std::vector<std::pair<std::string, FileResult>> failedFiles;
 
     // ── Process each input file ──
     for (const auto& inputFile : inputFiles)
@@ -537,16 +613,24 @@ int main(int argc, char* argv[])
             {
                 std::cerr << "Single file output mode is not supported for multiple inputs." << std::endl;
                 std::cerr << "Please use a directory for -o when batch processing." << std::endl;
+                FileResult skipped;
+                skipped.failReason = "single file output mode is not supported for multiple inputs, use a directory for -o";
+                failedFiles.emplace_back(absInput, std::move(skipped));
                 continue;
             }
             outputPath = options.outputPath;
         }
 
         std::string absOutput = fs::absolute(outputPath).string();
-        if (processFile(absInput, absOutput, options.format, options.withImage, context))
+        FileResult result = processFile(absInput, absOutput, options.format, options.withImage, context);
+        if (result.ok)
         {
             ++successCount;
-            convertedFiles.push_back(absOutput);
+            succeededFiles.emplace_back(absInput, std::move(result));
+        }
+        else
+        {
+            failedFiles.emplace_back(absInput, std::move(result));
         }
     }
 
@@ -555,12 +639,31 @@ int main(int argc, char* argv[])
 
     std::cout << "\nDone! Processed " << successCount << "/" << inputFiles.size() << " files." << std::endl;
 
-    if (!convertedFiles.empty())
+    if (!succeededFiles.empty())
     {
-        std::cout << "\nConverted files:" << std::endl;
-        for (const auto& f : convertedFiles)
+        std::cout << "\nSucceeded (" << succeededFiles.size() << "):" << std::endl;
+        for (const auto& entry : succeededFiles)
         {
-            std::cout << "  " << StringConverter::ansiToUtf8(f) << std::endl;
+            std::cout << "  " << StringConverter::ansiToUtf8(entry.first) << std::endl;
+            for (const auto& out : entry.second.outputs)
+            {
+                std::cout << "    -> " << StringConverter::ansiToUtf8(out) << std::endl;
+            }
+        }
+    }
+
+    if (!failedFiles.empty())
+    {
+        std::cout << "\nFailed (" << failedFiles.size() << "):" << std::endl;
+        for (const auto& entry : failedFiles)
+        {
+            std::cout << "  " << StringConverter::ansiToUtf8(entry.first) << std::endl;
+            std::cout << "    reason: " << StringConverter::ansiToUtf8(entry.second.failReason) << std::endl;
+            // 多扫描时可能部分成功, 把已经写出的文件也列出来
+            for (const auto& out : entry.second.outputs)
+            {
+                std::cout << "    partial output: " << StringConverter::ansiToUtf8(out) << std::endl;
+            }
         }
     }
 

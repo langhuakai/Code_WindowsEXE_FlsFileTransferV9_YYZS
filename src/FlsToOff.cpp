@@ -22,14 +22,25 @@ static BOOL offWriteAll(HANDLE hFile, const void* data, size_t totalBytes)
     return TRUE;
 }
 
-bool FlsToOff::savePointCloudToOFF(const std::string& filename,
-    const std::vector<LSPointXYZRGB>& points)
+// 失败原因既打印到 stderr, 也回传给上层汇总
+static bool offFail(std::string* failReason, const std::string& msg)
 {
+    if (failReason) *failReason = msg;
+    std::cerr << msg << std::endl;
+    return false;
+}
+
+bool FlsToOff::savePointCloudToOFF(const std::string& filename,
+    const std::vector<LSPointXYZRGB>& points,
+    std::string* failReason)
+{
+    if (failReason) failReason->clear();
     HANDLE hFile = CreateFileA(filename.c_str(), GENERIC_WRITE, 0, NULL,
         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) {
-        std::cerr << "Failed to open OFF file: " << StringConverter::ansiToUtf8(filename) << " error=" << GetLastError() << std::endl;
-        return false;
+        DWORD err = GetLastError();
+        return offFail(failReason, "Failed to open OFF file: " + StringConverter::ansiToUtf8(filename)
+            + " error=" + std::to_string(err));
     }
 
     std::ostringstream oss;
@@ -43,16 +54,21 @@ bool FlsToOff::savePointCloudToOFF(const std::string& filename,
     }
 
     std::string content = oss.str();
-    offWriteAll(hFile, content.data(), content.size());
+    BOOL ok = offWriteAll(hFile, content.data(), content.size());
 
     FlushFileBuffers(hFile);
     CloseHandle(hFile);
+    if (!ok) {
+        return offFail(failReason, "Failed to write OFF: " + StringConverter::ansiToUtf8(filename));
+    }
     std::cout << "Saved " << points.size() << " points to OFF: " << StringConverter::ansiToUtf8(filename) << std::endl;
     return true;
 }
 
-std::string FlsToOff::transToOff(const ref_ptr<LSScan> scan, const std::string outputPath)
+std::string FlsToOff::transToOff(const ref_ptr<LSScan> scan, const std::string outputPath,
+    std::string* failReason)
 {
+    if (failReason) failReason->clear();
     std::cout << "\nReading point cloud for OFF..." << std::endl;
 
     bool hasColor = scan->dataAvailable(LSScan::COLOR);
@@ -73,8 +89,9 @@ std::string FlsToOff::transToOff(const ref_ptr<LSScan> scan, const std::string o
 
     std::cout << "Total: " << pointCount << " points." << std::endl;
 
-    if (pointCount > 0) {
-        savePointCloudToOFF(outputPath, points);
+    if (pointCount == 0) {
+        offFail(failReason, "No points to export.");
+        return std::string();
     }
-    return outputPath;
+    return savePointCloudToOFF(outputPath, points, failReason) ? outputPath : std::string();
 }
